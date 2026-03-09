@@ -1,0 +1,17 @@
+# Environment — contains private keys, never commit
+.env
+
+# Hardhat artifacts and cache
+artifacts/
+cache/
+typechain-types/
+
+# Node
+node_modules/
+
+# Compiled output
+dist/
+
+# Coverage
+coverage/
+coverage.json

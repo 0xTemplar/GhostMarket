@@ -23,6 +23,8 @@ build/
 .env
 .env.*
 !.env.example
+# Flow CLI — contains dev emulator key, not for production
+web/flow.json
 
 # IDE and editors
 .idea/

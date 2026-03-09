@@ -1,5 +1,4 @@
 """Shared Pydantic models for GhostMarket API."""
-from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel
@@ -42,3 +41,19 @@ class Position(BaseModel):
     current_value: float
     status: MarketStatus
     expiry_at: str
+
+
+# ─── Session / Auth models ───────────────────────────────────────────────────
+
+class SessionResponse(BaseModel):
+    token: str
+    addr: str
+    evm_address: str = ""
+    expires_at: int
+
+
+# ─── Relayer models ──────────────────────────────────────────────────────────
+
+class RelayResponse(BaseModel):
+    tx_hash: str
+    mode: str  # "sponsored-rpc" | "public-rpc" | "backend-eoa"

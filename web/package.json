@@ -9,6 +9,10 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@onflow/dev-wallet": "^0.0.10",
+    "@onflow/fcl": "^1.21.9",
+    "@onflow/fcl-ethereum-provider": "^0.1.1",
+    "@privy-io/react-auth": "^3.16.0",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-slot": "^1.2.4",
     "class-variance-authority": "^0.7.1",
@@ -18,7 +22,8 @@
     "next": "^15.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "tailwind-merge": "^3.5.0"
+    "tailwind-merge": "^3.5.0",
+    "viem": "^2.47.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.1",

@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import { Navbar } from '@/components/navbar';
 import { BetSlipProvider } from '@/components/bet-slip-provider';
+import { AppProviders } from '@/lib/privy/provider';
 import './globals.css';
 
 const inter = Inter({
@@ -26,10 +27,12 @@ export default function RootLayout({
       <body
         className={`${inter.className} antialiased bg-slate-950 text-slate-300 selection:bg-indigo-500/30`}
       >
-        <BetSlipProvider>
-          <Navbar />
-          <main className="min-h-[calc(100vh-4rem)]">{children}</main>
-        </BetSlipProvider>
+        <AppProviders>
+          <BetSlipProvider>
+            <Navbar />
+            <main className="min-h-[calc(100vh-4rem)]">{children}</main>
+          </BetSlipProvider>
+        </AppProviders>
       </body>
     </html>
   );

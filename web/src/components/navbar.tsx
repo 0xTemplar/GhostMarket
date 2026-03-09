@@ -11,6 +11,7 @@ import {
   Ghost,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { AuthButton } from '@/components/auth-button';
 
 const mainLinks = [
   { href: '/', label: 'Markets', icon: LayoutGrid },
@@ -96,9 +97,7 @@ export function Navbar() {
             <span className="absolute top-2 right-2 w-2 h-2 bg-indigo-500 rounded-full shadow-[0_0_8px_rgba(99,102,241,0.8)]" />
           </button>
 
-          <button className="w-full px-5 py-2.5 rounded-full text-sm font-semibold bg-indigo-500 hover:bg-indigo-400 text-white transition-all shadow-[0_0_20px_rgba(99,102,241,0.25)]">
-            Connect wallet
-          </button>
+          <AuthButton />
           <button className="lg:hidden p-2 hover:bg-white/5 rounded-lg">
             <Menu className="w-6 h-6" strokeWidth={1.5} />
           </button>
