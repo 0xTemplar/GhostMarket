@@ -1,26 +1,86 @@
 'use client';
 
-import { useState, useMemo, useEffect, Suspense } from 'react';
+import { useState, useMemo, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { Loader2 } from 'lucide-react';
 import { HeroSection } from '@/components/hero-section';
 import { FilterBar } from '@/components/filter-bar';
 import { SortControl, type SortOption } from '@/components/sort-control';
 import { MarketCard } from '@/components/market-card';
 import { Sidebar } from '@/components/sidebar';
 import { mockMarkets } from '@/data/markets';
+import type { Market } from '@/types/market';
+import {
+  readAllMarkets,
+  toFrontendMarket,
+  isMarketDeployed,
+} from '@/lib/flow/market';
+
+// ─── Data loading ─────────────────────────────────────────────────────────────
+
+function useMarkets() {
+  const [onChain,  setOnChain]  = useState<Market[]>([]);
+  const [loading,  setLoading]  = useState(isMarketDeployed());
+  const [hydrated, setHydrated] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!isMarketDeployed()) {
+      setLoading(false);
+      return;
+    }
+    try {
+      const raw = await readAllMarkets();
+      setOnChain(raw.map(toFrontendMarket));
+    } catch {
+      // silently fall back to mock data
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    setHydrated(true);
+    load();
+  }, [load]);
+
+  /**
+   * Merge strategy:
+   *  - On-chain markets are shown first (real data, live prices).
+   *  - Mock markets that share a title with an on-chain market are suppressed.
+   *  - Remaining mock markets fill the listing so it never looks empty during
+   *    testnet when only a few on-chain markets exist.
+   */
+  const markets: Market[] = useMemo(() => {
+    if (!hydrated) return mockMarkets;
+
+    const onChainTitles = new Set(onChain.map((m) => m.title));
+    const filteredMock  = mockMarkets.filter((m) => !onChainTitles.has(m.title));
+
+    return [...onChain, ...filteredMock];
+  }, [onChain, hydrated]);
+
+  return { markets, loading, onChainCount: onChain.length };
+}
+
+// ─── Main content ─────────────────────────────────────────────────────────────
 
 function HomeContent() {
   const searchParams = useSearchParams();
-  const catFromUrl = searchParams.get('cat');
-  const [category, setCategory] = useState(catFromUrl ? capitalize(catFromUrl) : 'All');
+  const catFromUrl   = searchParams.get('cat');
+
+  const [category, setCategory] = useState(
+    catFromUrl ? capitalize(catFromUrl) : 'All',
+  );
   const [sort, setSort] = useState<SortOption>('trending');
 
   useEffect(() => {
     if (catFromUrl) setCategory(capitalize(catFromUrl));
   }, [catFromUrl]);
 
+  const { markets, loading, onChainCount } = useMarkets();
+
   const filtered = useMemo(() => {
-    let markets = [...mockMarkets];
+    let list = [...markets];
 
     if (category !== 'All') {
       const catMap: Record<string, string> = {
@@ -34,36 +94,36 @@ function HomeContent() {
       };
       const target = catMap[category] ?? category;
       if (target !== 'All') {
-        markets = markets.filter((m) => m.category === target);
+        list = list.filter((m) => m.category === target);
       }
     }
 
     switch (sort) {
       case 'volume':
-        markets.sort((a, b) => b.volume - a.volume);
+        list.sort((a, b) => b.volume - a.volume);
         break;
       case 'newest':
-        markets.sort(
+        list.sort(
           (a, b) =>
-            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
         );
         break;
       case 'ending-soon':
-        markets.sort(
+        list.sort(
           (a, b) =>
-            new Date(a.expiryAt).getTime() - new Date(b.expiryAt).getTime()
+            new Date(a.expiryAt).getTime() - new Date(b.expiryAt).getTime(),
         );
         break;
       case 'trending':
       default:
-        markets.sort((a, b) => {
+        list.sort((a, b) => {
           if (a.trending !== b.trending) return a.trending ? -1 : 1;
           return b.volume - a.volume;
         });
     }
 
-    return markets;
-  }, [category, sort]);
+    return list;
+  }, [markets, category, sort]);
 
   return (
     <>
@@ -71,34 +131,53 @@ function HomeContent() {
 
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6">
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
-          {/* Left Column */}
+
+          {/* Left column */}
           <div className="xl:col-span-9 space-y-8">
-            {/* Filters & Controls */}
+
+            {/* Status bar — shows when on-chain markets are loaded */}
+            {onChainCount > 0 && (
+              <div className="flex items-center gap-2 text-xs text-emerald-400">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                {onChainCount} live market{onChainCount !== 1 ? 's' : ''} on Flow EVM
+              </div>
+            )}
+
+            {/* Filters */}
             <div className="flex flex-col md:flex-row items-center justify-between gap-4 py-2">
               <FilterBar selected={category} onChange={setCategory} />
               <SortControl value={sort} onChange={setSort} />
             </div>
 
-            {/* Markets Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {filtered.map((market, i) => (
-                <MarketCard
-                  key={market.id}
-                  market={market}
-                  index={i}
-                  variant={i === 0 ? 'highlight' : 'compact'}
-                />
-              ))}
-            </div>
-
-            {filtered.length === 0 && (
-              <div className="rounded-2xl border border-white/5 bg-slate-900 p-12 text-center">
-                <p className="text-slate-500">No markets found.</p>
+            {/* Grid */}
+            {loading ? (
+              <div className="flex items-center justify-center py-24 gap-3 text-slate-500">
+                <Loader2 className="h-6 w-6 animate-spin" />
+                <span className="text-sm">Loading markets from chain…</span>
               </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {filtered.map((market, i) => (
+                    <MarketCard
+                      key={market.id}
+                      market={market}
+                      index={i}
+                      variant={i === 0 ? 'highlight' : 'compact'}
+                    />
+                  ))}
+                </div>
+
+                {filtered.length === 0 && (
+                  <div className="rounded-2xl border border-white/5 bg-slate-900 p-12 text-center">
+                    <p className="text-slate-500">No markets in this category.</p>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
-          {/* Right Sidebar */}
+          {/* Sidebar */}
           <div className="xl:col-span-3">
             <Sidebar />
           </div>
@@ -114,7 +193,13 @@ function capitalize(s: string) {
 
 export default function HomePage() {
   return (
-    <Suspense fallback={<div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6 animate-pulse">Loading...</div>}>
+    <Suspense
+      fallback={
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 flex items-center justify-center py-24 gap-3 text-slate-500">
+          <Loader2 className="h-6 w-6 animate-spin" />
+        </div>
+      }
+    >
       <HomeContent />
     </Suspense>
   );

@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts/access/Ownable2Step.sol";
+
 /**
  * @title GhostVault
  * @notice Consumer-facing custody vault on Flow EVM.
@@ -14,11 +18,13 @@ pragma solidity ^0.8.24;
  *  - Accept attested payout messages from an authorised settlement signer.
  *  - Enforce nonce-based replay protection per market per user.
  *
- * Gas on Flow EVM is negligible (~$0.0001 per tx), but the `depositFor`
- * function supports a backend relayer sponsoring gas so users never need
- * to hold FLOW for fees.
+ * Safety:
+ *  - ReentrancyGuard on deposit and withdraw.
+ *  - Pausable circuit breaker.
+ *  - Ownable2Step: new owner must explicitly accept before transfer completes.
  */
-contract GhostVault {
+contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step {
+
     // ─── State ────────────────────────────────────────────────────────────────
 
     /// @notice Vault balance per EVM address (in wei / 1e-18 FLOW).
@@ -29,8 +35,6 @@ contract GhostVault {
      * Set at deploy time; owner can rotate it.
      */
     address public settlementSigner;
-
-    address public owner;
 
     /// @notice Replay-protection: tracks consumed (user, marketId, nonce) triples.
     mapping(address => mapping(bytes32 => mapping(uint256 => bool))) public usedNonces;
@@ -49,21 +53,14 @@ contract GhostVault {
     error InvalidSignature();
     error NonceAlreadyUsed();
     error PayoutExpired();
-    error Unauthorised();
     error ZeroAmount();
+    error ZeroAddress();
 
     // ─── Constructor ──────────────────────────────────────────────────────────
 
-    constructor(address _settlementSigner) {
-        owner = msg.sender;
+    constructor(address _settlementSigner) Ownable(msg.sender) {
+        if (_settlementSigner == address(0)) revert ZeroAddress();
         settlementSigner = _settlementSigner;
-    }
-
-    // ─── Modifiers ────────────────────────────────────────────────────────────
-
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert Unauthorised();
-        _;
     }
 
     // ─── Deposit ──────────────────────────────────────────────────────────────
@@ -72,7 +69,7 @@ contract GhostVault {
      * @notice Direct deposit: user calls this and pays their own gas.
      *         Gas cost on Flow EVM is ~$0.0001 so this is acceptable.
      */
-    function deposit() external payable {
+    function deposit() external payable nonReentrant whenNotPaused {
         if (msg.value == 0) revert ZeroAmount();
         balances[msg.sender] += msg.value;
         emit Deposited(msg.sender, msg.value);
@@ -87,9 +84,9 @@ contract GhostVault {
      * relayer verifies it before calling this function (Phase 8). For Phase 2
      * the relayer is a trusted EOA controlled by the backend.
      */
-    function depositFor(address user) external payable {
+    function depositFor(address user) external payable nonReentrant whenNotPaused {
         if (msg.value == 0) revert ZeroAmount();
-        if (user == address(0)) revert Unauthorised();
+        if (user == address(0)) revert ZeroAddress();
         balances[user] += msg.value;
         emit Deposited(user, msg.value);
     }
@@ -98,12 +95,16 @@ contract GhostVault {
 
     /**
      * @notice Withdraw FLOW from the vault back to msg.sender.
+     *         Follows CEI: balance updated before the external call.
      */
-    function withdraw(uint256 amount) external {
+    function withdraw(uint256 amount) external nonReentrant whenNotPaused {
         if (amount == 0) revert ZeroAmount();
         uint256 have = balances[msg.sender];
         if (have < amount) revert InsufficientBalance(have, amount);
+
+        // ── Effect before interaction ─────────────────────────────────────────
         unchecked { balances[msg.sender] = have - amount; }
+
         (bool ok, ) = msg.sender.call{value: amount}("");
         if (!ok) revert TransferFailed();
         emit Withdrawn(msg.sender, amount);
@@ -161,13 +162,14 @@ contract GhostVault {
     // ─── Owner admin ──────────────────────────────────────────────────────────
 
     function setSettlementSigner(address next) external onlyOwner {
+        if (next == address(0)) revert ZeroAddress();
         emit SettlementSignerUpdated(settlementSigner, next);
         settlementSigner = next;
     }
 
-    function transferOwnership(address next) external onlyOwner {
-        owner = next;
-    }
+    /// @notice Emergency stop — blocks deposits and withdrawals.
+    function pause()   external onlyOwner { _pause(); }
+    function unpause() external onlyOwner { _unpause(); }
 
     // ─── Internal ─────────────────────────────────────────────────────────────
 
@@ -184,7 +186,12 @@ contract GhostVault {
         return ecrecover(hash, v, r, s);
     }
 
+    /**
+     * @notice Plain FLOW transfers credit the sender's vault balance.
+     *         Blocked when paused so emergency stops work end-to-end.
+     */
     receive() external payable {
+        require(!paused(), "Pausable: paused");
         balances[msg.sender] += msg.value;
         emit Deposited(msg.sender, msg.value);
     }

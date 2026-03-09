@@ -5,17 +5,21 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutGrid,
   Briefcase,
+  Wallet,
   Search,
   Bell,
   Menu,
   Ghost,
+  Shield,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { AuthButton } from '@/components/auth-button';
+import { useFlowAuth } from '@/lib/flow/provider';
 
 const mainLinks = [
   { href: '/', label: 'Markets', icon: LayoutGrid },
   { href: '/portfolio', label: 'Portfolio', icon: Briefcase },
+  { href: '/vault', label: 'Vault', icon: Wallet },
 ];
 
 const categories = [
@@ -29,8 +33,14 @@ const categories = [
   'Climate',
 ];
 
+const ADMIN_ADDRESS = process.env.NEXT_PUBLIC_ADMIN_ADDRESS?.toLowerCase();
+
 export function Navbar() {
   const pathname = usePathname();
+  const { user } = useFlowAuth();
+  const isAdmin =
+    ADMIN_ADDRESS &&
+    user.evmAddress?.toLowerCase() === ADMIN_ADDRESS;
 
   return (
     <nav className="border-b border-white/5 bg-slate-950/95 backdrop-blur-md sticky top-0 z-50">
@@ -97,6 +107,20 @@ export function Navbar() {
             <span className="absolute top-2 right-2 w-2 h-2 bg-indigo-500 rounded-full shadow-[0_0_8px_rgba(99,102,241,0.8)]" />
           </button>
 
+          {isAdmin && (
+            <Link
+              href="/admin"
+              title="Admin"
+              className={cn(
+                'p-2 rounded-lg transition-colors',
+                pathname.startsWith('/admin')
+                  ? 'bg-amber-500/10 text-amber-400'
+                  : 'text-slate-500 hover:text-amber-400 hover:bg-amber-500/10'
+              )}
+            >
+              <Shield className="w-5 h-5" strokeWidth={1.5} />
+            </Link>
+          )}
           <AuthButton />
           <button className="lg:hidden p-2 hover:bg-white/5 rounded-lg">
             <Menu className="w-6 h-6" strokeWidth={1.5} />

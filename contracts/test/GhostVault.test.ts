@@ -1,5 +1,6 @@
 import { expect } from 'chai';
 import { ethers } from 'hardhat';
+import { time } from '@nomicfoundation/hardhat-network-helpers';
 import { GhostVault } from '../typechain-types';
 import { SignerWithAddress } from '@nomicfoundation/hardhat-ethers/signers';
 
@@ -68,7 +69,7 @@ describe('GhostVault', function () {
     const marketId = ethers.keccak256(ethers.toUtf8Bytes('market-001'));
     const amount = ethers.parseEther('5.0');
     const nonce = 1;
-    const expiry = Math.floor(Date.now() / 1000) + 3600;
+    const expiry = (await time.latest()) + 3600;
     const vaultAddress = await vault.getAddress();
 
     const msgHash = ethers.keccak256(
@@ -90,7 +91,7 @@ describe('GhostVault', function () {
     const marketId = ethers.keccak256(ethers.toUtf8Bytes('market-002'));
     const amount = ethers.parseEther('1.0');
     const nonce = 1;
-    const expiry = Math.floor(Date.now() / 1000) + 3600;
+    const expiry = (await time.latest()) + 3600;
     const vaultAddress = await vault.getAddress();
 
     const msgHash = ethers.keccak256(
@@ -111,7 +112,7 @@ describe('GhostVault', function () {
     const marketId = ethers.keccak256(ethers.toUtf8Bytes('market-003'));
     const amount = ethers.parseEther('1.0');
     const nonce = 1;
-    const expiry = Math.floor(Date.now() / 1000) - 1; // already expired
+    const expiry = (await time.latest()) - 1; // already expired
     const vaultAddress = await vault.getAddress();
 
     const msgHash = ethers.keccak256(
@@ -139,6 +140,34 @@ describe('GhostVault', function () {
   it('non-owner cannot rotate settlement signer', async () => {
     await expect(
       vault.connect(user).setSettlementSigner(user.address)
-    ).to.be.revertedWithCustomError(vault, 'Unauthorised');
+    ).to.be.revertedWithCustomError(vault, 'OwnableUnauthorizedAccount');
+  });
+
+  it('setSettlementSigner reverts on zero address', async () => {
+    await expect(
+      vault.connect(owner).setSettlementSigner(ethers.ZeroAddress)
+    ).to.be.revertedWithCustomError(vault, 'ZeroAddress');
+  });
+
+  it('Ownable2Step: new owner must accept before transfer completes', async () => {
+    await vault.transferOwnership(user.address);
+    expect(await vault.owner()).to.equal(owner.address); // still old owner
+    await vault.connect(user).acceptOwnership();
+    expect(await vault.owner()).to.equal(user.address);
+  });
+
+  it('pause blocks deposit', async () => {
+    await vault.connect(owner).pause();
+    await expect(
+      vault.connect(user).deposit({ value: ethers.parseEther('1') })
+    ).to.be.revertedWithCustomError(vault, 'EnforcedPause');
+  });
+
+  it('pause blocks withdraw', async () => {
+    await vault.connect(user).deposit({ value: ethers.parseEther('1') });
+    await vault.connect(owner).pause();
+    await expect(
+      vault.connect(user).withdraw(ethers.parseEther('1'))
+    ).to.be.revertedWithCustomError(vault, 'EnforcedPause');
   });
 });
