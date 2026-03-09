@@ -26,30 +26,30 @@ export function PortfolioSummary({ stats }: PortfolioSummaryProps) {
       label: 'Total Value',
       value: formatCurrency(stats.totalValue),
       icon: Layers,
-      color: 'text-primary',
-      bg: 'bg-primary-soft',
+      color: 'text-indigo-400',
+      bg: 'bg-indigo-500/10',
     },
     {
       label: 'Total P&L',
       value: `${isPositive ? '+' : ''}${formatCurrency(stats.totalPnl)}`,
       sub: formatPercent(stats.totalPnlPercent),
       icon: isPositive ? TrendingUp : TrendingDown,
-      color: isPositive ? 'text-yes' : 'text-no',
-      bg: isPositive ? 'bg-yes-soft' : 'bg-no-soft',
+      color: isPositive ? 'text-emerald-500' : 'text-rose-500',
+      bg: isPositive ? 'bg-emerald-500/10' : 'bg-rose-500/10',
     },
     {
       label: 'Open Positions',
       value: stats.openPositions.toString(),
       icon: Target,
-      color: 'text-text-secondary',
-      bg: 'bg-elevated',
+      color: 'text-slate-400',
+      bg: 'bg-slate-800',
     },
     {
       label: 'Cost Basis',
       value: formatCurrency(stats.totalCost),
       icon: Layers,
-      color: 'text-text-secondary',
-      bg: 'bg-elevated',
+      color: 'text-slate-400',
+      bg: 'bg-slate-800',
     },
   ];
 
@@ -62,10 +62,10 @@ export function PortfolioSummary({ stats }: PortfolioSummaryProps) {
           initial="hidden"
           animate="visible"
           variants={cardVariants}
-          className="rounded-2xl border border-border bg-card p-5 shadow-[0_1px_3px_rgba(0,0,0,0.04)]"
+          className="rounded-2xl border border-white/5 bg-slate-900 p-5"
         >
           <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-medium text-text-muted uppercase tracking-wide">
+            <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">
               {card.label}
             </span>
             <div
@@ -77,14 +77,14 @@ export function PortfolioSummary({ stats }: PortfolioSummaryProps) {
               <card.icon className={cn('h-4 w-4', card.color)} />
             </div>
           </div>
-          <div className="font-heading text-xl font-bold text-text">
+          <div className="text-xl font-bold text-white">
             {card.value}
           </div>
           {card.sub && (
             <div
               className={cn(
                 'mt-1 text-sm font-medium',
-                isPositive ? 'text-yes' : 'text-no'
+                isPositive ? 'text-emerald-500' : 'text-rose-500'
               )}
             >
               {card.sub}

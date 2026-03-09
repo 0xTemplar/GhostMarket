@@ -5,8 +5,6 @@ import { motion } from 'framer-motion';
 import { ArrowUpRight, Clock } from 'lucide-react';
 import type { Position } from '@/types/market';
 import { formatCurrency, formatPercent, formatTimeRemaining, cn } from '@/lib/utils';
-import { Badge } from '@/components/ui/badge';
-
 interface PortfolioPositionRowProps {
   position: Position;
   index?: number;
@@ -26,50 +24,58 @@ export function PortfolioPositionRow({
     >
       <Link
         href={`/markets/${position.marketId}`}
-        className="group block rounded-2xl border border-border bg-card p-5 shadow-[0_1px_3px_rgba(0,0,0,0.04)] transition-all duration-200 hover:shadow-[0_4px_16px_rgba(0,0,0,0.06)] hover:border-border-hover"
+        className="group block rounded-2xl border border-white/5 bg-slate-900 p-5 transition-all duration-200 hover:border-white/10"
       >
         <div className="flex flex-col sm:flex-row sm:items-center gap-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-2">
-              <Badge variant={position.side === 'YES' ? 'yes' : 'no'}>
+              <span
+                className={`px-2.5 py-1 rounded-lg text-xs font-medium ${
+                  position.side === 'YES'
+                    ? 'bg-emerald-500/10 text-emerald-500'
+                    : 'bg-rose-500/10 text-rose-500'
+                }`}
+              >
                 {position.side}
-              </Badge>
-              <Badge variant="default">{position.category}</Badge>
-              <span className="flex items-center gap-1 text-xs text-text-muted">
+              </span>
+              <span className="px-2.5 py-1 rounded-lg text-xs font-medium bg-white/5 text-slate-400">
+                {position.category}
+              </span>
+              <span className="flex items-center gap-1 text-xs text-slate-500">
                 <Clock className="h-3 w-3" />
                 {formatTimeRemaining(position.expiryAt)}
               </span>
             </div>
-            <h3 className="font-heading text-[15px] font-semibold text-text truncate group-hover:text-primary transition-colors">
+            <h3 className="text-[15px] font-semibold text-white truncate group-hover:text-indigo-400 transition-colors">
               {position.marketTitle}
             </h3>
           </div>
 
           <div className="flex items-center gap-6 sm:gap-8 sm:text-right flex-shrink-0">
             <div>
-              <div className="text-xs text-text-muted mb-0.5">Avg Entry</div>
-              <div className="font-mono text-sm font-medium text-text">
+              <div className="text-xs text-slate-500 mb-0.5">Avg Entry</div>
+              <div className="font-mono text-sm font-medium text-white">
                 {Math.round(position.avgPrice * 100)}¢
               </div>
             </div>
             <div>
-              <div className="text-xs text-text-muted mb-0.5">Current</div>
-              <div className="font-mono text-sm font-medium text-text">
+              <div className="text-xs text-slate-500 mb-0.5">Current</div>
+              <div className="font-mono text-sm font-medium text-white">
                 {Math.round(position.currentPrice * 100)}¢
               </div>
             </div>
             <div>
-              <div className="text-xs text-text-muted mb-0.5">Value</div>
-              <div className="font-mono text-sm font-semibold text-text">
+              <div className="text-xs text-slate-500 mb-0.5">Value</div>
+              <div className="font-mono text-sm font-semibold text-white">
                 {formatCurrency(position.currentValue)}
               </div>
             </div>
             <div className="min-w-[72px]">
-              <div className="text-xs text-text-muted mb-0.5">P&L</div>
+              <div className="text-xs text-slate-500 mb-0.5">P&L</div>
               <div
                 className={cn(
                   'font-mono text-sm font-semibold',
-                  isPositive ? 'text-yes' : 'text-no'
+                  isPositive ? 'text-emerald-500' : 'text-rose-500'
                 )}
               >
                 {isPositive ? '+' : ''}
@@ -78,13 +84,13 @@ export function PortfolioPositionRow({
               <div
                 className={cn(
                   'font-mono text-xs',
-                  isPositive ? 'text-yes' : 'text-no'
+                  isPositive ? 'text-emerald-500' : 'text-rose-500'
                 )}
               >
                 {formatPercent(position.pnlPercent)}
               </div>
             </div>
-            <ArrowUpRight className="h-4 w-4 text-text-muted group-hover:text-primary transition-colors hidden sm:block" />
+            <ArrowUpRight className="h-4 w-4 text-slate-500 group-hover:text-indigo-400 transition-colors hidden sm:block" />
           </div>
         </div>
       </Link>

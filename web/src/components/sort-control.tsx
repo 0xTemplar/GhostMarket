@@ -1,6 +1,6 @@
 'use client';
 
-import { ArrowUpDown } from 'lucide-react';
+import { Sparkles, LayoutGrid, List, ChevronDown } from 'lucide-react';
 
 export type SortOption = 'trending' | 'volume' | 'newest' | 'ending-soon';
 
@@ -11,26 +11,45 @@ interface SortControlProps {
 
 const options: { value: SortOption; label: string }[] = [
   { value: 'trending', label: 'Trending' },
-  { value: 'volume', label: 'Highest Volume' },
   { value: 'newest', label: 'Newest' },
+  { value: 'volume', label: 'Volume' },
   { value: 'ending-soon', label: 'Ending Soon' },
 ];
 
 export function SortControl({ value, onChange }: SortControlProps) {
+  const currentLabel = options.find((o) => o.value === value)?.label ?? 'Newest';
+
   return (
-    <div className="flex items-center gap-2">
-      <ArrowUpDown className="h-3.5 w-3.5 text-text-muted flex-shrink-0" />
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value as SortOption)}
-        className="appearance-none rounded-lg border border-border bg-card px-3 py-1.5 pr-8 text-sm text-text-secondary transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/15 cursor-pointer bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%239C9B96%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E')] bg-[position:right_8px_center] bg-no-repeat"
-      >
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
+    <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
+      <div className="flex gap-1 bg-slate-900 border border-white/10 rounded-lg p-1">
+        <div className="relative">
+          <button
+            onClick={() => {}}
+            className="px-3 py-1.5 text-sm font-medium text-white bg-white/10 rounded flex items-center gap-2"
+          >
+            <Sparkles className="w-3.5 h-3.5" strokeWidth={1.5} />
+            {currentLabel}
+            <ChevronDown className="w-3.5 h-3.5 ml-1" strokeWidth={1.5} />
+          </button>
+          <select
+            value={value}
+            onChange={(e) => onChange(e.target.value as SortOption)}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+          >
+            {options.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button className="p-1.5 hover:bg-white/5 rounded text-white">
+          <LayoutGrid className="w-5 h-5" strokeWidth={1.5} />
+        </button>
+        <button className="p-1.5 hover:bg-white/5 rounded text-slate-500">
+          <List className="w-5 h-5" strokeWidth={1.5} />
+        </button>
+      </div>
     </div>
   );
 }

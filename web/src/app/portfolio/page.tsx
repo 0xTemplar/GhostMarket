@@ -6,8 +6,6 @@ import { ArrowRight, Ghost } from 'lucide-react';
 import { mockPositions, mockPortfolioStats } from '@/data/markets';
 import { PortfolioSummary } from '@/components/portfolio-summary';
 import { PortfolioPositionRow } from '@/components/portfolio-position-row';
-import { Button } from '@/components/ui/button';
-
 export default function PortfolioPage() {
   const hasPositions = mockPositions.length > 0;
 
@@ -19,10 +17,10 @@ export default function PortfolioPage() {
         transition={{ duration: 0.4 }}
       >
         <div className="mb-8">
-          <h1 className="font-heading text-2xl sm:text-3xl font-bold tracking-tight text-text">
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
             Portfolio
           </h1>
-          <p className="mt-1.5 text-text-secondary text-sm sm:text-base">
+          <p className="mt-1.5 text-slate-400 text-sm sm:text-base">
             Your open positions and performance. Exact sizes are shielded.
           </p>
         </div>
@@ -34,10 +32,10 @@ export default function PortfolioPage() {
             </div>
 
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="font-heading text-lg font-bold text-text">
+              <h2 className="text-lg font-bold text-white">
                 Open Positions
               </h2>
-              <span className="text-sm text-text-muted">
+              <span className="text-sm text-slate-500">
                 {mockPositions.length} position
                 {mockPositions.length !== 1 ? 's' : ''}
               </span>
@@ -54,22 +52,23 @@ export default function PortfolioPage() {
             </div>
           </>
         ) : (
-          <div className="rounded-2xl border border-dashed border-border bg-card p-16 text-center">
-            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary-soft">
-              <Ghost className="h-7 w-7 text-primary" />
+          <div className="rounded-2xl border border-dashed border-white/10 bg-slate-900 p-16 text-center">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-500/10">
+              <Ghost className="h-7 w-7 text-indigo-400" />
             </div>
-            <h3 className="font-heading text-lg font-bold text-text mb-2">
+            <h3 className="text-lg font-bold text-white mb-2">
               No positions yet
             </h3>
-            <p className="text-sm text-text-muted mb-6 max-w-sm mx-auto">
+            <p className="text-sm text-slate-500 mb-6 max-w-sm mx-auto">
               Browse active markets and place your first shielded prediction
               to get started.
             </p>
-            <Link href="/">
-              <Button>
-                Browse Markets
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
+            <Link
+              href="/"
+              className="inline-flex items-center gap-2 rounded-full bg-indigo-500 hover:bg-indigo-400 px-5 py-2.5 text-sm font-semibold text-white transition-colors"
+            >
+              Browse Markets
+              <ArrowRight className="h-4 w-4" />
             </Link>
           </div>
         )}

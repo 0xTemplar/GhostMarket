@@ -13,6 +13,7 @@ export interface Market {
   title: string;
   description: string;
   category: MarketCategory;
+  image?: string;
   resolutionSource: string;
   expiryAt: string;
   status: MarketStatus;

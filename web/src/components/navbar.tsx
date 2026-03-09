@@ -2,91 +2,128 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { TrendingUp, Briefcase, Ghost } from 'lucide-react';
+import {
+  LayoutGrid,
+  Briefcase,
+  Search,
+  Bell,
+  Menu,
+  Ghost,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
 
-const links = [
-  { href: '/', label: 'Markets', icon: TrendingUp },
+const mainLinks = [
+  { href: '/', label: 'Markets', icon: LayoutGrid },
   { href: '/portfolio', label: 'Portfolio', icon: Briefcase },
+];
+
+const categories = [
+  'All',
+  'For You',
+  'Politics',
+  'Sports',
+  'Crypto',
+  'Macro',
+  'Tech',
+  'Climate',
 ];
 
 export function Navbar() {
   const pathname = usePathname();
 
   return (
-    <header className="sticky top-0 z-40 border-b border-border/80 bg-card/80 backdrop-blur-xl">
-      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+    <nav className="border-b border-white/5 bg-slate-950/95 backdrop-blur-md sticky top-0 z-50">
+      {/* Primary Nav */}
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-6">
         <div className="flex items-center gap-8">
-          <Link href="/" className="flex items-center gap-2.5 group">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary shadow-sm shadow-primary/25 transition-shadow group-hover:shadow-md group-hover:shadow-primary/30">
-              <Ghost className="h-[18px] w-[18px] text-white" />
+          <Link href="/" className="flex items-center gap-2 text-white">
+            <div className="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(99,102,241,0.5)]">
+              <Ghost className="w-5 h-5 text-white" strokeWidth={1.5} />
             </div>
-            <span className="font-heading text-lg font-bold tracking-tight text-text">
-              Ghost<span className="text-primary">Market</span>
+            <span className="text-xl font-medium tracking-tight">
+              Ghost<span className="text-indigo-400">Market</span>
             </span>
           </Link>
 
-          <nav className="hidden sm:flex items-center gap-1">
-            {links.map((link) => {
+          <div className="hidden md:flex items-center gap-1">
+            {mainLinks.map((link) => {
               const isActive =
                 link.href === '/'
                   ? pathname === '/'
                   : pathname.startsWith(link.href);
-
               return (
                 <Link
                   key={link.href}
                   href={link.href}
                   className={cn(
-                    'flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors',
+                    'flex items-center gap-2 px-4 py-2 text-sm rounded-lg font-medium transition-colors',
                     isActive
-                      ? 'bg-primary-soft text-primary'
-                      : 'text-text-secondary hover:text-text hover:bg-elevated'
+                      ? 'text-indigo-400 bg-indigo-500/10'
+                      : 'hover:text-white hover:bg-white/5'
                   )}
                 >
-                  <link.icon className="h-4 w-4" />
+                  <link.icon className="w-4 h-4" strokeWidth={1.5} />
                   {link.label}
-                </Link>
-              );
-            })}
-          </nav>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Button
-            variant="outline"
-            size="sm"
-            className="hidden sm:inline-flex"
-          >
-            Connect Wallet
-          </Button>
-
-          <div className="flex sm:hidden items-center gap-1">
-            {links.map((link) => {
-              const isActive =
-                link.href === '/'
-                  ? pathname === '/'
-                  : pathname.startsWith(link.href);
-
-              return (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  className={cn(
-                    'flex items-center justify-center rounded-lg p-2.5 transition-colors',
-                    isActive
-                      ? 'bg-primary-soft text-primary'
-                      : 'text-text-secondary hover:text-text'
-                  )}
-                >
-                  <link.icon className="h-5 w-5" />
                 </Link>
               );
             })}
           </div>
         </div>
+
+        <div className="flex items-center gap-4 flex-1 justify-end max-w-md">
+          <div className="relative hidden lg:block w-full group">
+            <Search
+              className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-slate-300 transition-colors"
+              strokeWidth={1.5}
+            />
+            <input
+              type="text"
+              placeholder="Search everything..."
+              className="w-full bg-slate-900 border border-white/10 rounded-full py-2.5 pl-10 pr-10 text-sm focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/50 transition-all placeholder:text-slate-600"
+            />
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-600 border border-white/10 px-1.5 py-0.5 rounded bg-white/5">
+              /
+            </span>
+          </div>
+
+          <div className="h-6 w-px bg-white/10 mx-2 hidden sm:block" />
+
+          <button
+            className="relative p-2 hover:bg-white/5 rounded-full transition-colors"
+            aria-label="Notifications"
+          >
+            <Bell className="w-5 h-5" strokeWidth={1.5} />
+            <span className="absolute top-2 right-2 w-2 h-2 bg-indigo-500 rounded-full shadow-[0_0_8px_rgba(99,102,241,0.8)]" />
+          </button>
+
+          <button className="w-full px-5 py-2.5 rounded-full text-sm font-semibold bg-indigo-500 hover:bg-indigo-400 text-white transition-all shadow-[0_0_20px_rgba(99,102,241,0.25)]">
+            Connect wallet
+          </button>
+          <button className="lg:hidden p-2 hover:bg-white/5 rounded-lg">
+            <Menu className="w-6 h-6" strokeWidth={1.5} />
+          </button>
+        </div>
       </div>
-    </header>
+
+      {/* Secondary Nav - Categories */}
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 border-t border-white/5 h-12 flex items-center overflow-x-auto scrollbar-none gap-6 text-sm">
+        <div className="flex items-center gap-2 text-indigo-400 border-b-2 border-indigo-400 h-full px-1 shrink-0">
+          <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+          <span className="font-medium">Live</span>
+        </div>
+        {categories.map((cat) => (
+          <Link
+            key={cat}
+            href={cat === 'All' ? '/' : `/?cat=${cat.toLowerCase()}`}
+            className={cn(
+              'whitespace-nowrap transition-colors shrink-0',
+              cat === 'All' ? 'text-white font-medium' : 'hover:text-slate-100'
+            )}
+          >
+            {cat}
+          </Link>
+        ))}
+      </div>
+    </nav>
   );
 }

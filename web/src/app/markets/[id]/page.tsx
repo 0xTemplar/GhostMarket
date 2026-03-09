@@ -16,8 +16,6 @@ import {
   TrendingDown,
 } from 'lucide-react';
 import { mockMarkets } from '@/data/markets';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { StatPill } from '@/components/stat-pill';
 import { AreaChart } from '@/components/area-chart';
 import { useBetSlip } from '@/components/bet-slip-provider';
@@ -38,17 +36,15 @@ export default function MarketDetailPage() {
   if (!market) {
     return (
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-20 text-center">
-        <h2 className="font-heading text-xl font-bold text-text mb-2">
-          Market not found
-        </h2>
-        <p className="text-text-muted mb-6">
+        <h2 className="text-xl font-bold text-white mb-2">Market not found</h2>
+        <p className="text-slate-500 mb-6">
           This market doesn&apos;t exist or has been removed.
         </p>
         <Link href="/">
-          <Button variant="outline">
-            <ArrowLeft className="mr-2 h-4 w-4" />
+          <button className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-white/10 bg-slate-800 hover:bg-slate-700 text-white text-sm font-medium transition-colors">
+            <ArrowLeft className="h-4 w-4" />
             Back to Markets
-          </Button>
+          </button>
         </Link>
       </div>
     );
@@ -67,25 +63,35 @@ export default function MarketDetailPage() {
       >
         <Link
           href="/"
-          className="inline-flex items-center gap-1.5 text-sm text-text-muted hover:text-text transition-colors mb-6 group"
+          className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-white transition-colors mb-6 group"
         >
           <ArrowLeft className="h-4 w-4 group-hover:-translate-x-0.5 transition-transform" />
           Back to Markets
         </Link>
 
-        <div className="flex items-center gap-2 flex-wrap mb-3">
-          <Badge variant="primary">{market.category}</Badge>
-          <Badge
-            variant="default"
-            className="capitalize"
-          >
+        <div className="flex items-start gap-4 mb-4">
+          {market.image && (
+            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden shrink-0 border border-white/10 bg-slate-800">
+              <img
+                src={market.image}
+                alt=""
+                className="w-full h-full object-cover"
+              />
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap mb-2">
+          <span className="px-2.5 py-1 rounded-lg text-xs font-medium bg-indigo-500/10 text-indigo-400">
+            {market.category}
+          </span>
+          <span className="px-2.5 py-1 rounded-lg text-xs font-medium bg-white/5 text-slate-400 capitalize">
             {market.status}
-          </Badge>
+          </span>
           {market.trending && (
-            <Badge variant="trending">
-              <Flame className="mr-1 h-3 w-3" />
+            <span className="px-2.5 py-1 rounded-lg text-xs font-medium bg-emerald-500/10 text-emerald-500">
+              <Flame className="inline mr-1 h-3 w-3" />
               Trending
-            </Badge>
+            </span>
           )}
           <div
             className={cn(
@@ -102,13 +108,15 @@ export default function MarketDetailPage() {
           </div>
         </div>
 
-        <h1 className="font-heading text-2xl sm:text-3xl font-bold tracking-tight text-text mb-3 max-w-3xl">
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white mb-3 max-w-3xl">
           {market.title}
         </h1>
 
-        <p className="text-text-secondary leading-relaxed max-w-2xl mb-8">
+        <p className="text-slate-400 leading-relaxed max-w-2xl mb-8">
           {market.description}
         </p>
+          </div>
+        </div>
 
         <div className="grid gap-6 lg:grid-cols-3">
           <div className="lg:col-span-2 space-y-6">
@@ -131,12 +139,12 @@ export default function MarketDetailPage() {
               />
             </div>
 
-            <div className="rounded-2xl border border-border bg-card p-5 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+            <div className="rounded-2xl border border-white/5 bg-slate-900 p-5">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="font-heading text-sm font-semibold text-text">
+                <h3 className="text-sm font-semibold text-white">
                   Price History
                 </h3>
-                <div className="flex items-center gap-4 text-xs text-text-muted">
+                <div className="flex items-center gap-4 text-xs text-slate-500">
                   <span className="flex items-center gap-1.5">
                     <span className="h-2 w-2 rounded-full bg-yes" />
                     YES
@@ -147,53 +155,53 @@ export default function MarketDetailPage() {
               <AreaChart data={market.priceHistory} height={220} />
             </div>
 
-            <div className="rounded-2xl border border-border bg-card p-5 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
-              <h3 className="font-heading text-sm font-semibold text-text mb-4">
+            <div className="rounded-2xl border border-white/5 bg-slate-900 p-5">
+              <h3 className="text-sm font-semibold text-white mb-4">
                 Market Details
               </h3>
               <div className="space-y-3">
-                <div className="flex items-start justify-between py-2 border-b border-border/60">
-                  <span className="text-sm text-text-muted flex items-center gap-2">
+                <div className="flex items-start justify-between py-2 border-b border-white/5">
+                  <span className="text-sm text-slate-500 flex items-center gap-2">
                     <ExternalLink className="h-3.5 w-3.5" />
                     Resolution Source
                   </span>
-                  <span className="text-sm font-medium text-text text-right">
+                  <span className="text-sm font-medium text-white text-right">
                     {market.resolutionSource}
                   </span>
                 </div>
                 <div className="flex items-start justify-between py-2 border-b border-border/60">
-                  <span className="text-sm text-text-muted flex items-center gap-2">
+                  <span className="text-sm text-slate-500 flex items-center gap-2">
                     <Clock className="h-3.5 w-3.5" />
                     Expiry Date
                   </span>
-                  <span className="text-sm font-medium text-text">
+                  <span className="text-sm font-medium text-white">
                     {formatDate(market.expiryAt)}
                   </span>
                 </div>
                 <div className="flex items-start justify-between py-2 border-b border-border/60">
-                  <span className="text-sm text-text-muted flex items-center gap-2">
+                  <span className="text-sm text-slate-500 flex items-center gap-2">
                     <BarChart3 className="h-3.5 w-3.5" />
                     Volume
                   </span>
-                  <span className="text-sm font-medium text-text">
+                  <span className="text-sm font-medium text-white">
                     {formatVolume(market.volume)}
                   </span>
                 </div>
                 <div className="flex items-start justify-between py-2 border-b border-border/60">
-                  <span className="text-sm text-text-muted flex items-center gap-2">
+                  <span className="text-sm text-slate-500 flex items-center gap-2">
                     <Droplets className="h-3.5 w-3.5" />
                     Liquidity
                   </span>
-                  <span className="text-sm font-medium text-text">
+                  <span className="text-sm font-medium text-white">
                     {formatVolume(market.liquidity)}
                   </span>
                 </div>
                 <div className="flex items-start justify-between py-2">
-                  <span className="text-sm text-text-muted flex items-center gap-2">
+                  <span className="text-sm text-slate-500 flex items-center gap-2">
                     <Users className="h-3.5 w-3.5" />
                     Traders
                   </span>
-                  <span className="text-sm font-medium text-text">
+                  <span className="text-sm font-medium text-white">
                     {market.tradersCount.toLocaleString()}
                   </span>
                 </div>
@@ -203,61 +211,57 @@ export default function MarketDetailPage() {
 
           <div className="lg:col-span-1">
             <div className="sticky top-24">
-              <div className="rounded-2xl border border-border bg-card p-5 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
-                <h3 className="font-heading text-sm font-semibold text-text mb-4">
+              <div className="rounded-2xl border border-white/5 bg-slate-900 p-5">
+                <h3 className="text-sm font-semibold text-white mb-4">
                   Trade
                 </h3>
 
                 <div className="grid grid-cols-2 gap-3 mb-5">
-                  <div className="rounded-xl border-2 border-yes/20 bg-yes-soft p-4 text-center">
-                    <div className="text-xs font-medium text-yes/70 uppercase tracking-wide mb-1">
+                  <div className="rounded-xl border-2 border-emerald-500/20 bg-emerald-500/10 p-4 text-center">
+                    <div className="text-xs font-medium text-emerald-400/70 uppercase tracking-wide mb-1">
                       Yes
                     </div>
-                    <div className="font-mono text-2xl font-bold text-yes">
+                    <div className="font-mono text-2xl font-bold text-emerald-500">
                       {yesPct}¢
                     </div>
                   </div>
-                  <div className="rounded-xl border-2 border-no/20 bg-no-soft p-4 text-center">
-                    <div className="text-xs font-medium text-no/70 uppercase tracking-wide mb-1">
+                  <div className="rounded-xl border-2 border-rose-500/20 bg-rose-500/10 p-4 text-center">
+                    <div className="text-xs font-medium text-rose-400/70 uppercase tracking-wide mb-1">
                       No
                     </div>
-                    <div className="font-mono text-2xl font-bold text-no">
+                    <div className="font-mono text-2xl font-bold text-rose-500">
                       {noPct}¢
                     </div>
                   </div>
                 </div>
 
-                <div className="w-full h-2 rounded-full bg-no/15 mb-5 overflow-hidden">
+                <div className="w-full h-2 rounded-full bg-rose-500/15 mb-5 overflow-hidden">
                   <div
-                    className="h-full rounded-full bg-gradient-to-r from-yes to-yes/80 transition-all"
+                    className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-500/80 transition-all"
                     style={{ width: `${yesPct}%` }}
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <Button
-                    variant="yes"
-                    size="lg"
-                    className="w-full font-heading"
+                  <button
                     onClick={() => openBetSlip(market, 'YES')}
+                    className="w-full h-12 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white font-semibold flex items-center justify-center gap-2 transition-colors"
                   >
-                    <Shield className="mr-2 h-4 w-4" />
+                    <Shield className="h-4 w-4" />
                     Buy Yes — {yesPct}¢
-                  </Button>
-                  <Button
-                    variant="no"
-                    size="lg"
-                    className="w-full font-heading"
+                  </button>
+                  <button
                     onClick={() => openBetSlip(market, 'NO')}
+                    className="w-full h-12 rounded-lg bg-rose-500 hover:bg-rose-400 text-white font-semibold flex items-center justify-center gap-2 transition-colors"
                   >
-                    <Shield className="mr-2 h-4 w-4" />
+                    <Shield className="h-4 w-4" />
                     Buy No — {noPct}¢
-                  </Button>
+                  </button>
                 </div>
 
-                <div className="mt-4 flex items-start gap-2 rounded-lg bg-primary-soft/50 p-3">
-                  <Shield className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
-                  <p className="text-xs text-primary/80 leading-relaxed">
+                <div className="mt-4 flex items-start gap-2 rounded-lg bg-indigo-500/10 p-3">
+                  <Shield className="h-4 w-4 text-indigo-400 mt-0.5 flex-shrink-0" />
+                  <p className="text-xs text-indigo-300 leading-relaxed">
                     Orders are shielded — position size and intent are encrypted
                     before execution on the eAMM.
                   </p>

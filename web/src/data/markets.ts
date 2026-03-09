@@ -3,6 +3,7 @@ import type { Market, Position, PortfolioStats } from '@/types/market';
 export const mockMarkets: Market[] = [
   {
     id: 'eth-10k-2026',
+    image: 'https://picsum.photos/seed/eth-10k/200/200',
     title: 'Will ETH trade above $10,000 before April 2026?',
     description:
       'Resolves YES if ETH/USD closes at or above $10,000 on any major exchange (Coinbase, Binance, Kraken) at 23:59 UTC March 31, 2026.',
@@ -26,6 +27,7 @@ export const mockMarkets: Market[] = [
   },
   {
     id: 'fed-rate-cut-q2',
+    image: 'https://picsum.photos/seed/fed-rates/200/200',
     title: 'Will the Fed cut rates in Q2 2026?',
     description:
       'Resolves YES if the Federal Reserve announces at least one 25bp rate cut during Q2 2026 (April–June). Based on FOMC meeting outcomes.',
@@ -49,6 +51,7 @@ export const mockMarkets: Market[] = [
   },
   {
     id: 'btc-150k',
+    image: 'https://picsum.photos/seed/btc-150k/200/200',
     title: 'Will BTC reach $150K by end of 2026?',
     description:
       'Resolves YES if BTC/USD trades at or above $150,000 on any major spot exchange before December 31, 2026 at 23:59 UTC.',
@@ -72,6 +75,7 @@ export const mockMarkets: Market[] = [
   },
   {
     id: 'ai-regulation-eu',
+    image: 'https://picsum.photos/seed/eu-ai/200/200',
     title: 'EU AI Act: major enforcement action before July 2026?',
     description:
       'Resolves YES if the EU AI Act results in at least one major enforcement action or fine exceeding €10M announced before July 1, 2026.',
@@ -95,6 +99,7 @@ export const mockMarkets: Market[] = [
   },
   {
     id: 'openai-ipo-2026',
+    image: 'https://picsum.photos/seed/openai-ipo/200/200',
     title: 'Will OpenAI IPO in 2026?',
     description:
       'Resolves YES if OpenAI completes an initial public offering or direct listing on a US exchange by December 31, 2026.',
@@ -118,6 +123,7 @@ export const mockMarkets: Market[] = [
   },
   {
     id: 'us-recession-2026',
+    image: 'https://picsum.photos/seed/us-recession/200/200',
     title: 'Will the US enter a recession in 2026?',
     description:
       'Resolves YES if the NBER Business Cycle Dating Committee declares a US recession starting in or before December 2026.',
@@ -141,6 +147,7 @@ export const mockMarkets: Market[] = [
   },
   {
     id: 'sol-eth-flip',
+    image: 'https://picsum.photos/seed/sol-eth/200/200',
     title: 'Will SOL market cap exceed ETH in 2026?',
     description:
       'Resolves YES if Solana\'s total market capitalization exceeds Ethereum\'s on CoinGecko for at least 24 consecutive hours in 2026.',
@@ -164,6 +171,7 @@ export const mockMarkets: Market[] = [
   },
   {
     id: 'paris-olympics-athletics',
+    image: 'https://picsum.photos/seed/olympics/200/200',
     title: 'Will a world record fall in track & field at the 2026 World Championships?',
     description:
       'Resolves YES if at least one individual track and field world record is broken at the 2026 World Athletics Championships in Tokyo.',
@@ -187,6 +195,7 @@ export const mockMarkets: Market[] = [
   },
   {
     id: 'arctic-ice-record',
+    image: 'https://picsum.photos/seed/arctic-ice/200/200',
     title: 'Will Arctic sea ice hit a new minimum record in 2026?',
     description:
       'Resolves YES if the NSIDC reports a new all-time minimum Arctic sea ice extent during the 2026 melt season (June–September).',

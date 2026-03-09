@@ -1,33 +1,41 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { HeroSection } from '@/components/hero-section';
-import { SearchInput } from '@/components/search-input';
 import { FilterBar } from '@/components/filter-bar';
 import { SortControl, type SortOption } from '@/components/sort-control';
-import { MarketGrid } from '@/components/market-grid';
+import { MarketCard } from '@/components/market-card';
+import { Sidebar } from '@/components/sidebar';
 import { mockMarkets } from '@/data/markets';
 
-export default function HomePage() {
-  const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('All');
+function HomeContent() {
+  const searchParams = useSearchParams();
+  const catFromUrl = searchParams.get('cat');
+  const [category, setCategory] = useState(catFromUrl ? capitalize(catFromUrl) : 'All');
   const [sort, setSort] = useState<SortOption>('trending');
+
+  useEffect(() => {
+    if (catFromUrl) setCategory(capitalize(catFromUrl));
+  }, [catFromUrl]);
 
   const filtered = useMemo(() => {
     let markets = [...mockMarkets];
 
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      markets = markets.filter(
-        (m) =>
-          m.title.toLowerCase().includes(q) ||
-          m.description.toLowerCase().includes(q) ||
-          m.category.toLowerCase().includes(q)
-      );
-    }
-
     if (category !== 'All') {
-      markets = markets.filter((m) => m.category === category);
+      const catMap: Record<string, string> = {
+        'For You': 'All',
+        Politics: 'Politics',
+        Sports: 'Sports',
+        Crypto: 'Crypto',
+        Macro: 'Macro',
+        Tech: 'Tech',
+        Climate: 'Climate',
+      };
+      const target = catMap[category] ?? category;
+      if (target !== 'All') {
+        markets = markets.filter((m) => m.category === target);
+      }
     }
 
     switch (sort) {
@@ -55,37 +63,59 @@ export default function HomePage() {
     }
 
     return markets;
-  }, [search, category, sort]);
+  }, [category, sort]);
 
   return (
     <>
       <HeroSection />
 
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-4 mb-6">
-          <SearchInput
-            value={search}
-            onChange={setSearch}
-            className="flex-1 max-w-md"
-          />
-          <SortControl value={sort} onChange={setSort} />
-        </div>
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6">
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
+          {/* Left Column */}
+          <div className="xl:col-span-9 space-y-8">
+            {/* Filters & Controls */}
+            <div className="flex flex-col md:flex-row items-center justify-between gap-4 py-2">
+              <FilterBar selected={category} onChange={setCategory} />
+              <SortControl value={sort} onChange={setSort} />
+            </div>
 
-        <div className="mb-6">
-          <FilterBar selected={category} onChange={setCategory} />
-        </div>
+            {/* Markets Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {filtered.map((market, i) => (
+                <MarketCard
+                  key={market.id}
+                  market={market}
+                  index={i}
+                  variant={i === 0 ? 'highlight' : 'compact'}
+                />
+              ))}
+            </div>
 
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="font-heading text-lg font-bold text-text">
-            {category === 'All' ? 'All Markets' : category}
-          </h2>
-          <span className="text-sm text-text-muted">
-            {filtered.length} market{filtered.length !== 1 ? 's' : ''}
-          </span>
-        </div>
+            {filtered.length === 0 && (
+              <div className="rounded-2xl border border-white/5 bg-slate-900 p-12 text-center">
+                <p className="text-slate-500">No markets found.</p>
+              </div>
+            )}
+          </div>
 
-        <MarketGrid markets={filtered} />
+          {/* Right Sidebar */}
+          <div className="xl:col-span-3">
+            <Sidebar />
+          </div>
+        </div>
       </div>
     </>
+  );
+}
+
+function capitalize(s: string) {
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+
+export default function HomePage() {
+  return (
+    <Suspense fallback={<div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6 animate-pulse">Loading...</div>}>
+      <HomeContent />
+    </Suspense>
   );
 }
