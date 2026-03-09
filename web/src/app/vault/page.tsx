@@ -31,7 +31,7 @@ interface TxState {
 const NOT_DEPLOYED = GHOST_VAULT_ADDRESS === '0x0000000000000000000000000000000000000000';
 
 export default function VaultPage() {
-  const { user, login, setupCoa } = useFlowAuth();
+  const { user, login, setupCoa, isLoading } = useFlowAuth();
   const walletClient = useFlowWalletClient();
   const [balance, setBalance] = useState<string | null>(null);
   const [depositAmount, setDepositAmount] = useState('');
@@ -94,6 +94,14 @@ export default function VaultPage() {
     }
   }
 
+  if (isLoading || user.evmLoading) {
+    return (
+      <div className="min-h-[calc(100vh-7rem)] flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-slate-600" />
+      </div>
+    );
+  }
+
   if (!user.loggedIn) {
     return (
       <div className="min-h-[calc(100vh-7rem)] flex items-center justify-center px-4">
@@ -146,13 +154,6 @@ export default function VaultPage() {
     );
   }
 
-  if (user.evmLoading) {
-    return (
-      <div className="min-h-[calc(100vh-7rem)] flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-slate-600" />
-      </div>
-    );
-  }
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-10 space-y-6">
