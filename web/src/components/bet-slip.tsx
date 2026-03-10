@@ -3,12 +3,21 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  X, Shield, ArrowRight, Check, Loader2, AlertCircle, ExternalLink,
+  X, Shield, ArrowRight, Check, Loader2, AlertCircle, ExternalLink, Lock,
 } from 'lucide-react';
 import type { Market } from '@/types/market';
 import { cn } from '@/lib/utils';
+import { useWallets } from '@privy-io/react-auth';
 import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
 import { placeBet } from '@/lib/flow/market';
+import {
+  encryptBetInput,
+  placeEncryptedBet,
+  buildZamaWalletClient,
+  toWei,
+  isEammDeployed,
+  GHOST_EAMM_ADDRESS,
+} from '@/lib/flow/eamm';
 
 interface BetSlipProps {
   market: Market;
@@ -19,9 +28,10 @@ interface BetSlipProps {
 
 type TxState =
   | { phase: 'idle' }
+  | { phase: 'encrypting' }
   | { phase: 'signing' }
   | { phase: 'pending'; hash: string }
-  | { phase: 'success'; hash: string }
+  | { phase: 'success'; hash: string; shielded?: boolean }
   | { phase: 'error'; message: string };
 
 /** True when the market ID is a uint256 on-chain ID (e.g. '1', '2'). */
@@ -29,19 +39,24 @@ function isOnChainMarket(id: string): boolean {
   return /^\d+$/.test(id);
 }
 
-const FLOWSCAN_BASE = 'https://evm-testnet.flowscan.io';
+const FLOWSCAN_BASE  = 'https://evm-testnet.flowscan.io';
+// GhostEAMM runs on Ethereum Sepolia — link to Etherscan Sepolia
+const SEPOLIASCAN_BASE = 'https://sepolia.etherscan.io';
 
 function shortenHash(hash: string): string {
   return `${hash.slice(0, 8)}…${hash.slice(-6)}`;
 }
 
 export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
-  const [amount, setAmount] = useState('');
-  const [txState, setTxState] = useState<TxState>({ phase: 'idle' });
-  const [mounted, setMounted] = useState(false);
+  const [amount, setAmount]       = useState('');
+  const [txState, setTxState]     = useState<TxState>({ phase: 'idle' });
+  const [mounted, setMounted]     = useState(false);
+  // shieldedMode: true = route through GhostEAMM (Zama fhevm), false = GhostMarket (Flow EVM)
+  const [shieldedMode, setShieldedMode] = useState(isEammDeployed());
 
   const { user, login, isLoading } = useFlowAuth();
   const walletClient = useFlowWalletClient();
+  const { wallets } = useWallets();
 
   const onChain      = isOnChainMarket(market.id);
   const price        = side === 'YES' ? market.yesPrice : market.noPrice;
@@ -62,34 +77,59 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
     if (txState.phase === 'error') setTxState({ phase: 'idle' });
   }, [side, amount]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!isValid) return;
+  // ─── Shielded path (eAMM on Zama / Ethereum Sepolia) ───────────────────────
+  const handleShieldedSubmit = async () => {
+    setTxState({ phase: 'encrypting' });
+    try {
+      // Get the Privy embedded wallet and switch it to Sepolia (11155111).
+      // We must NOT use window.ethereum — that's the injected MetaMask/browser
+      // wallet, which is a different key from the Privy embedded wallet the user
+      // is actually logged in with.
+      const embeddedWallet = wallets.find((w) => w.walletClientType === 'privy');
+      if (!embeddedWallet) throw new Error('Privy embedded wallet not found. Try logging out and back in.');
 
-    // Prompt login if not authenticated
-    if (!user.loggedIn) {
-      login();
-      return;
+      // Switch embedded wallet to Sepolia before requesting the provider.
+      await embeddedWallet.switchChain(11155111);
+      const provider = await embeddedWallet.getEthereumProvider();
+
+      const userAddress = (user.evmAddress ?? embeddedWallet.address) as `0x${string}`;
+
+      // 1. Encrypt the bet amount client-side using @zama-fhe/relayer-sdk.
+      //    The provider is not used by initFhevm (relayer-sdk uses RPC URL),
+      //    but passing it maintains the function signature.
+      const amountWei = toWei(amount);
+      const encrypted = await encryptBetInput(provider, GHOST_EAMM_ADDRESS, userAddress, amountWei);
+
+      // 2. Sign + submit to GhostEAMM on Ethereum Sepolia.
+      setTxState({ phase: 'signing' });
+      const zamaWallet = buildZamaWalletClient(provider);
+      const hash = await placeEncryptedBet(zamaWallet, Number(market.id), side === 'YES', encrypted);
+
+      setTxState({ phase: 'pending', hash });
+
+      // 3. Poll for confirmation on Sepolia.
+      const { zamaPublicClient } = await import('@/lib/flow/eamm');
+      await zamaPublicClient.waitForTransactionReceipt({ hash });
+      setTxState({ phase: 'success', hash, shielded: true });
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error
+          ? (err.message.includes('User rejected') ? 'Transaction rejected.' : err.message.slice(0, 160))
+          : 'Encrypted bet failed.';
+      setTxState({ phase: 'error', message });
     }
+  };
 
-    // Mock market — no on-chain interaction
-    if (!onChain) {
-      setTxState({ phase: 'success', hash: '0xmock' });
-      return;
-    }
-
+  // ─── Public path (GhostMarket on Flow EVM) ─────────────────────────────────
+  const handlePublicSubmit = async () => {
     if (!walletClient) {
       setTxState({ phase: 'error', message: 'Wallet not ready. Try again.' });
       return;
     }
-
     setTxState({ phase: 'signing' });
-
     try {
       const hash = await placeBet(walletClient, Number(market.id), side, amount);
       setTxState({ phase: 'pending', hash });
-
-      // Poll for confirmation
       const { publicClient } = await import('@/lib/flow/vault');
       await publicClient.waitForTransactionReceipt({ hash });
       setTxState({ phase: 'success', hash });
@@ -102,9 +142,22 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
     }
   };
 
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isValid) return;
+    if (!user.loggedIn) { login(); return; }
+    if (!onChain) { setTxState({ phase: 'success', hash: '0xmock' }); return; }
+    if (shieldedMode && isEammDeployed()) {
+      await handleShieldedSubmit();
+    } else {
+      await handlePublicSubmit();
+    }
+  };
+
   const quickAmounts = [1, 5, 10, 25];
-  const isBusy = txState.phase === 'signing' || txState.phase === 'pending';
+  const isBusy   = txState.phase === 'encrypting' || txState.phase === 'signing' || txState.phase === 'pending';
   const currency = onChain ? 'FLOW' : '$';
+  const scanBase = txState.phase === 'success' && txState.shielded ? SEPOLIASCAN_BASE : FLOWSCAN_BASE;
 
   return (
     <AnimatePresence>
@@ -138,6 +191,12 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                     Live
                   </span>
                 )}
+                {onChain && shieldedMode && isEammDeployed() && (
+                  <span className="rounded-full bg-indigo-500/10 px-2 py-0.5 text-[10px] font-medium text-indigo-400 border border-indigo-500/20 flex items-center gap-1">
+                    <Lock className="h-2.5 w-2.5" />
+                    Shielded
+                  </span>
+                )}
               </div>
               <button
                 onClick={onClose}
@@ -163,11 +222,13 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                   </div>
                   <h3 className="text-lg font-bold text-white">Order Confirmed</h3>
                   <p className="mt-2 text-sm text-slate-400 max-w-xs">
-                    Your {side} position on this market has been recorded on Flow EVM.
+                    {txState.phase === 'success' && txState.shielded
+                      ? `Your shielded ${side} position is recorded on Zama fhevm. Amount is encrypted.`
+                      : `Your ${side} position on this market has been recorded on Flow EVM.`}
                   </p>
                   {txState.hash && txState.hash !== '0xmock' && (
                     <a
-                      href={`${FLOWSCAN_BASE}/tx/${txState.hash}`}
+                      href={`${scanBase}/tx/${txState.hash}`}
                       target="_blank"
                       rel="noreferrer"
                       className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-slate-800 px-3 py-2 text-xs font-medium text-slate-300 hover:text-white transition-colors"
@@ -318,7 +379,7 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                   {/* Pending tx banner */}
                   {txState.phase === 'pending' && (
                     <a
-                      href={`${FLOWSCAN_BASE}/tx/${txState.hash}`}
+                      href={`${shieldedMode && isEammDeployed() ? SEPOLIASCAN_BASE : FLOWSCAN_BASE}/tx/${txState.hash}`}
                       target="_blank"
                       rel="noreferrer"
                       className="flex items-center gap-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20 p-3"
@@ -332,15 +393,54 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                     </a>
                   )}
 
-                  {/* Shield note */}
+                  {/* Shielded / public mode toggle */}
+                  {txState.phase === 'idle' && onChain && isEammDeployed() && (
+                    <div className="flex items-center justify-between rounded-xl border border-white/5 bg-slate-800/50 px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <Lock className="h-3.5 w-3.5 text-indigo-400" />
+                        <span className="text-xs font-medium text-slate-300">Shielded execution</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShieldedMode((v) => !v)}
+                        className={cn(
+                          'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none',
+                          shieldedMode ? 'bg-indigo-500' : 'bg-slate-600',
+                        )}
+                        role="switch"
+                        aria-checked={shieldedMode}
+                      >
+                        <span
+                          className={cn(
+                            'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                            shieldedMode ? 'translate-x-4' : 'translate-x-0',
+                          )}
+                        />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Privacy note */}
                   {txState.phase === 'idle' && (
                     <div className="flex items-start gap-2 rounded-lg bg-indigo-500/10 p-3">
                       <Shield className="h-4 w-4 text-indigo-400 mt-0.5 shrink-0" />
                       <p className="text-xs text-indigo-300 leading-relaxed">
-                        {onChain
-                          ? 'Order executes on Flow EVM. Encrypted execution (eAMM) activates in Phase 4.'
+                        {onChain && shieldedMode && isEammDeployed()
+                          ? 'Amount is encrypted via fhevmjs before submission. Position size is never publicly readable on-chain.'
+                          : onChain
+                          ? 'Executing on Flow EVM (public). Enable Shielded mode to hide your bet size.'
                           : 'Shielded by default — order size and intent are encrypted before execution.'}
                       </p>
+                    </div>
+                  )}
+
+                  {/* Encrypting state notice */}
+                  {txState.phase === 'encrypting' && (
+                    <div className="flex items-center gap-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20 p-3">
+                      <Loader2 className="h-4 w-4 text-indigo-400 animate-spin shrink-0" />
+                      <span className="text-xs text-indigo-300">
+                        Encrypting amount with fhevmjs…
+                      </span>
                     </div>
                   )}
 
@@ -359,7 +459,12 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                       disabled={!isValid || isBusy}
                       className="w-full h-12 rounded-lg bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold flex items-center justify-center gap-2 transition-colors"
                     >
-                      {txState.phase === 'signing' ? (
+                      {txState.phase === 'encrypting' ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Encrypting…
+                        </>
+                      ) : txState.phase === 'signing' ? (
                         <>
                           <Loader2 className="h-4 w-4 animate-spin" />
                           Waiting for signature…
@@ -371,7 +476,16 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                         </>
                       ) : (
                         <>
-                          Place {onChain ? 'Order' : 'Shielded Order'}
+                          {onChain && shieldedMode && isEammDeployed() ? (
+                            <Lock className="h-4 w-4" />
+                          ) : (
+                            <ArrowRight className="h-4 w-4" />
+                          )}
+                          {onChain && shieldedMode && isEammDeployed()
+                            ? 'Place Shielded Order'
+                            : onChain
+                            ? 'Place Order'
+                            : 'Place Shielded Order'}
                           <ArrowRight className="h-4 w-4" />
                         </>
                       )}
