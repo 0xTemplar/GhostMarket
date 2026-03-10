@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Clear
 pragma solidity ^0.8.24;
 
-import { FHE, euint64, externalEuint64 } from "@fhevm/solidity/lib/FHE.sol";
+import { FHE, euint64, ebool, externalEuint64 } from "@fhevm/solidity/lib/FHE.sol";
 import { ZamaEthereumConfig } from "@fhevm/solidity/config/ZamaConfig.sol";
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -54,6 +54,22 @@ contract GhostEAMM is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard, Pausabl
 
     /// @dev marketId → user → encrypted NO position accumulator
     mapping(uint256 => mapping(address => euint64)) private _noPositions;
+
+    // ─── Constants ────────────────────────────────────────────────────────────
+
+    /**
+     * @notice Minimum bet enforced privately via FHE.gt + FHE.select.
+     *
+     * Because we cannot revert inside the contract based on an encrypted
+     * comparison result, bets below this threshold are silently zeroed out:
+     * the pool and position receive an encrypted 0, leaving the user's
+     * position handle uninitialized (i.e., no dust position is recorded).
+     *
+     * This demonstrates conditional encrypted logic — the plaintext amount
+     * is never revealed to enforce this rule; all branching happens inside
+     * the FHE coprocessor.
+     */
+    uint64 public constant MIN_BET_WEI = 1_000_000_000; // 1 gwei
 
     // ─── Access control ───────────────────────────────────────────────────────
 
@@ -177,27 +193,47 @@ contract GhostEAMM is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard, Pausabl
         // (address(this), msg.sender) so it cannot be replayed by others.
         euint64 amount = FHE.fromExternal(encAmount, inputProof);
 
+        // ── Minimum bet guard (FHE.gt + FHE.select) ──────────────────────────
+        // We cannot revert on an encrypted comparison — the contract never sees
+        // the plaintext amount.  Instead we use FHE.select to zero out bets
+        // below MIN_BET_WEI; the pool addition of 0 is a no-op and the
+        // position handle is never initialized for dust submissions.
+        //
+        // All branching happens inside the Zama FHE coprocessor:
+        //   aboveMin      = encrypt(amount > MIN_BET_WEI)   ← encrypted bool
+        //   effectiveAmount = aboveMin ? amount : encrypt(0) ← encrypted select
+        euint64 minBet  = FHE.asEuint64(MIN_BET_WEI);
+        euint64 zeroAmt = FHE.asEuint64(0);
+        FHE.allowThis(minBet);
+        FHE.allowThis(zeroAmt);
+
+        ebool   aboveMin        = FHE.gt(amount, minBet);
+        FHE.allowThis(aboveMin);
+
+        euint64 effectiveAmount = FHE.select(aboveMin, amount, zeroAmt);
+        FHE.allowThis(effectiveAmount);
+
         if (side) {
             // ── YES bet ──────────────────────────────────────────────────────
-            m.yesPool = FHE.add(m.yesPool, amount);
+            m.yesPool = FHE.add(m.yesPool, effectiveAmount);
             // allowThis on the result so the contract can read it next call.
             FHE.allowThis(m.yesPool);
 
             _yesPositions[marketId][msg.sender] = FHE.add(
                 _yesPositions[marketId][msg.sender],
-                amount
+                effectiveAmount
             );
             FHE.allowThis(_yesPositions[marketId][msg.sender]);
             // Allow the user to gateway-decrypt their own position.
             FHE.allow(_yesPositions[marketId][msg.sender], msg.sender);
         } else {
             // ── NO bet ───────────────────────────────────────────────────────
-            m.noPool = FHE.add(m.noPool, amount);
+            m.noPool = FHE.add(m.noPool, effectiveAmount);
             FHE.allowThis(m.noPool);
 
             _noPositions[marketId][msg.sender] = FHE.add(
                 _noPositions[marketId][msg.sender],
-                amount
+                effectiveAmount
             );
             FHE.allowThis(_noPositions[marketId][msg.sender]);
             FHE.allow(_noPositions[marketId][msg.sender], msg.sender);

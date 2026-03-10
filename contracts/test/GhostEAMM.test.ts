@@ -460,6 +460,66 @@ describe('GhostEAMM', function () {
     });
   });
 
+  // ── Minimum bet guard (FHE.gt + FHE.select) ──────────────────────────────
+
+  describe('minimum bet guard', () => {
+    beforeEach(async () => {
+      await eamm.connect(manager).createMarket(MARKET_ID, EXPIRY_1H);
+    });
+
+    it('MIN_BET_WEI constant is exposed and non-zero', async () => {
+      const min = await eamm.MIN_BET_WEI();
+      expect(min).to.be.gt(0n);
+    });
+
+    it('bet above minimum records a non-zero position handle', async () => {
+      // ONE_ETH (1e18) >> MIN_BET_WEI (1e9) — FHE.select picks the real amount
+      const encInput = await fhevm
+        .createEncryptedInput(eammAddress, alice.address)
+        .add64(ONE_ETH)
+        .encrypt();
+
+      await eamm.connect(alice).placeBet(
+        MARKET_ID, true, encInput.handles[0], encInput.inputProof,
+      );
+
+      // Position handle should be initialized (non-zero bytes32)
+      const [yesHandle] = await eamm.getUserPositionHandles(MARKET_ID, alice.address);
+      expect(yesHandle).to.not.equal(ethers.ZeroHash);
+
+      // Decrypt to confirm the stored value equals the original amount
+      const decrypted = await fhevm.userDecryptEuint(
+        FhevmType.euint64, yesHandle, eammAddress, alice,
+      );
+      expect(decrypted).to.equal(ONE_ETH);
+    });
+
+    it('bet below minimum is silently zeroed — no dust position recorded', async () => {
+      // 500 wei < MIN_BET_WEI (1e9) — FHE.select returns encrypt(0)
+      const dustAmount = 500n;
+      const encInput = await fhevm
+        .createEncryptedInput(eammAddress, alice.address)
+        .add64(dustAmount)
+        .encrypt();
+
+      // Transaction succeeds (no revert) but position receives 0
+      await eamm.connect(alice).placeBet(
+        MARKET_ID, true, encInput.handles[0], encInput.inputProof,
+      );
+
+      // The position accumulator was incremented by 0, so decrypted value = 0
+      const [yesHandle] = await eamm.getUserPositionHandles(MARKET_ID, alice.address);
+      const decrypted = await fhevm.userDecryptEuint(
+        FhevmType.euint64, yesHandle, eammAddress, alice,
+      );
+      expect(decrypted).to.equal(0n);
+
+      // Note: FHE.isInitialized returns true once the slot is written, even if
+      // the value is 0. This is expected behaviour — the guard zeroes the value,
+      // it does not prevent the slot write.
+    });
+  });
+
   // ── Access control: admin functions ───────────────────────────────────────
 
   describe('admin', () => {
