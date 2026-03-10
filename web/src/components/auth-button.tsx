@@ -64,7 +64,7 @@ export function AuthButton() {
       <button
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          'w-full flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium border transition-all',
+          'w-fit flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium border transition-all',
           open
             ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
             : 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-200'
