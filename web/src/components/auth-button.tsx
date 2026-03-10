@@ -72,7 +72,9 @@ export function AuthButton() {
       >
         {/* avatar dot */}
         <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]" />
-        <span>{shortenAddr(displayAddr)}</span>
+        <span className="font-mono text-[13px] tabular-nums min-w-[7.5rem] text-left">
+          {shortenAddr(displayAddr)}
+        </span>
         <ChevronDown
           className={cn('w-3.5 h-3.5 transition-transform', open && 'rotate-180')}
           strokeWidth={2}

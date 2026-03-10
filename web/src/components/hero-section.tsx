@@ -6,14 +6,18 @@ import {
   ChevronRight,
   Shield,
   Lock,
-  TrendingUp,
-  Users,
-  Zap,
   ArrowUpRight,
   Activity,
 } from 'lucide-react';
 
 // ─── Platform stats ────────────────────────────────────────────────────────────
+
+const PLATFORM_STATS = [
+  { label: 'Total Volume',   value: '$8.2M'  },
+  { label: 'Active Markets', value: '47'     },
+  { label: 'Traders',        value: '18.4K'  },
+  { label: 'Privacy',        value: '100%'   },
+];
 
 // ─── Live ticker data ──────────────────────────────────────────────────────────
 
@@ -219,6 +223,19 @@ export function HeroSection() {
               </div>
             </Link>
           </div>
+        </div>
+
+        {/* ── Stats strip ── */}
+        <div className="mt-4 flex items-center gap-6 border-t border-b border-white/5 py-3.5">
+          {PLATFORM_STATS.map((stat, i) => (
+            <div key={stat.label} className="flex items-baseline gap-2">
+              <span className="text-base font-bold text-white tabular-nums">{stat.value}</span>
+              <span className="text-xs text-slate-500">{stat.label}</span>
+              {i < PLATFORM_STATS.length - 1 && (
+                <span className="ml-4 text-white/8 select-none">|</span>
+              )}
+            </div>
+          ))}
         </div>
 
         {/* ── Live market ticker ── */}

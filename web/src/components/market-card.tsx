@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { motion } from 'framer-motion';
-import { Activity, MessageCircle, Star, ArrowRight, Zap, TrendingUp, TrendingDown } from 'lucide-react';
+import { Activity, Star, ArrowRight, Zap } from 'lucide-react';
 import type { Market } from '@/types/market';
 import { formatVolume, formatTimeRemaining } from '@/lib/utils';
 import { useBetSlip } from '@/components/bet-slip-provider';
@@ -14,110 +14,61 @@ interface MarketCardProps {
   variant?: 'highlight' | 'compact';
 }
 
-/** True when the market ID is a uint256 on-chain ID (1, 2, 3 …). */
 function isLiveMarket(id: string): boolean {
   return /^\d+$/.test(id);
 }
 
-// ─── Category accent colours ──────────────────────────────────────────────────
-// All class strings must appear literally so Tailwind includes them in the build.
+// ─── Category accent — left border only, no bg flood ─────────────────────────
 
-type CategoryKey = 'Crypto' | 'Macro' | 'Politics' | 'Sports' | 'Tech' | 'Climate' | string;
-
-interface CategoryStyle {
-  border: string;        // card left border
-  glow: string;          // hover glow overlay
-  badge: string;         // category label bg + text
-  dot: string;           // small accent dot
-  chartPositive: boolean;
-}
-
-const CATEGORY_STYLES: Record<string, CategoryStyle> = {
-  Crypto:   { border: 'border-l-violet-500/70',  glow: 'from-violet-500/10',  badge: 'bg-violet-500/10 text-violet-400',  dot: 'bg-violet-500',  chartPositive: true  },
-  Macro:    { border: 'border-l-amber-500/70',   glow: 'from-amber-500/10',   badge: 'bg-amber-500/10  text-amber-400',   dot: 'bg-amber-500',   chartPositive: true  },
-  Politics: { border: 'border-l-blue-500/70',    glow: 'from-blue-500/10',    badge: 'bg-blue-500/10   text-blue-400',    dot: 'bg-blue-500',    chartPositive: false },
-  Sports:   { border: 'border-l-green-500/70',   glow: 'from-green-500/10',   badge: 'bg-green-500/10  text-green-400',   dot: 'bg-green-500',   chartPositive: true  },
-  Tech:     { border: 'border-l-cyan-500/70',    glow: 'from-cyan-500/10',    badge: 'bg-cyan-500/10   text-cyan-400',    dot: 'bg-cyan-500',    chartPositive: true  },
-  Climate:  { border: 'border-l-teal-500/70',    glow: 'from-teal-500/10',    badge: 'bg-teal-500/10   text-teal-400',    dot: 'bg-teal-500',    chartPositive: false },
+const CATEGORY_BORDER: Record<string, string> = {
+  Crypto:   'border-l-violet-500/50',
+  Macro:    'border-l-amber-500/50',
+  Politics: 'border-l-blue-500/50',
+  Sports:   'border-l-green-500/50',
+  Tech:     'border-l-cyan-500/50',
+  Climate:  'border-l-teal-500/50',
 };
 
-function getCategoryStyle(category: CategoryKey): CategoryStyle {
-  return CATEGORY_STYLES[category] ?? {
-    border: 'border-l-indigo-500/70',
-    glow: 'from-indigo-500/10',
-    badge: 'bg-indigo-500/10 text-indigo-400',
-    dot: 'bg-indigo-500',
-    chartPositive: true,
-  };
+function categoryBorder(cat: string) {
+  return CATEGORY_BORDER[cat] ?? 'border-l-indigo-500/50';
 }
 
-// ─── Circular progress ring ───────────────────────────────────────────────────
+// ─── Flat YES / NO price buttons ─────────────────────────────────────────────
 
-function CircularProgress({
-  value,
-  color,
-  size = 80,
-  showChange,
+function PriceButtons({
+  market,
+  size = 'md',
 }: {
-  value: number;
-  color: 'yes' | 'no';
-  size?: number;
-  showChange?: number;
+  market: Market;
+  size?: 'md' | 'sm';
 }) {
-  const pct        = Math.round(value * 100);
-  const strokeColor = color === 'yes' ? 'text-emerald-500' : 'text-rose-500';
-  const dashArray  = `${pct}, 100`;
-
-  return (
-    <div className="relative" style={{ width: size, height: size }}>
-      <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
-        <path
-          className="text-slate-700"
-          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-          fill="none" stroke="currentColor" strokeWidth="3"
-        />
-        <path
-          className={strokeColor}
-          strokeDasharray={dashArray}
-          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-          fill="none" stroke="currentColor" strokeWidth="3"
-        />
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-lg font-bold text-white">{pct}%</span>
-        {showChange !== undefined && (
-          <span className={`text-[10px] ${showChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-            {showChange >= 0 ? '+' : ''}{(showChange * 100).toFixed(1)}%
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─── Shared price bar for live markets (non-interactive) ──────────────────────
-
-function LivePriceDisplay({ market }: { market: Market }) {
+  const { openBetSlip } = useBetSlip();
   const yesPct = Math.round(market.yesPrice * 100);
   const noPct  = 100 - yesPct;
+  const numCls = size === 'md' ? 'text-base font-bold' : 'text-sm font-semibold';
 
   return (
-    <div className="space-y-3">
-      <div className="flex gap-3">
-        <div className="flex-1 rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-4 py-3 text-center">
-          <div className="text-xs font-medium text-emerald-400/70 uppercase tracking-wide mb-0.5">Yes</div>
-          <div className="font-mono text-xl font-bold text-emerald-500">{yesPct}¢</div>
-        </div>
-        <div className="flex-1 rounded-xl bg-rose-500/10 border border-rose-500/20 px-4 py-3 text-center">
-          <div className="text-xs font-medium text-rose-400/70 uppercase tracking-wide mb-0.5">No</div>
-          <div className="font-mono text-xl font-bold text-rose-500">{noPct}¢</div>
-        </div>
+    <div className="space-y-2">
+      <div className="flex gap-2">
+        <button
+          onClick={(e) => { e.preventDefault(); openBetSlip(market, 'YES'); }}
+          className="flex-1 flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-emerald-500/8 border border-emerald-500/15 hover:bg-emerald-500/12 hover:border-emerald-500/35 transition-all cursor-pointer"
+        >
+          <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Yes</span>
+          <span className={`font-mono text-emerald-400 ${numCls}`}>{yesPct}¢</span>
+        </button>
+        <button
+          onClick={(e) => { e.preventDefault(); openBetSlip(market, 'NO'); }}
+          className="flex-1 flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-rose-500/8 border border-rose-500/15 hover:bg-rose-500/12 hover:border-rose-500/35 transition-all cursor-pointer"
+        >
+          <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">No</span>
+          <span className={`font-mono text-rose-400 ${numCls}`}>{noPct}¢</span>
+        </button>
       </div>
-
-      {/* Pool bar */}
-      <div className="w-full h-1.5 rounded-full bg-rose-500/15 overflow-hidden">
+      {/* Probability split bar */}
+      <div className="h-px w-full rounded-full overflow-hidden bg-rose-500/20">
         <div
-          className="h-full rounded-full bg-linear-to-r from-emerald-500 to-emerald-400 transition-all"
+          className="h-full bg-emerald-500/60 transition-all duration-300"
           style={{ width: `${yesPct}%` }}
         />
       </div>
@@ -125,15 +76,89 @@ function LivePriceDisplay({ market }: { market: Market }) {
   );
 }
 
-// ─── Highlight (first card) ────────────────────────────────────────────────────
+// ─── Live price display (on-chain markets, non-interactive) ──────────────────
+
+function LivePriceDisplay({ market }: { market: Market }) {
+  const yesPct = Math.round(market.yesPrice * 100);
+  const noPct  = 100 - yesPct;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-2">
+        <div className="flex-1 flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-emerald-500/8 border border-emerald-500/15">
+          <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Yes</span>
+          <span className="font-mono text-base font-bold text-emerald-400">{yesPct}¢</span>
+        </div>
+        <div className="flex-1 flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-rose-500/8 border border-rose-500/15">
+          <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">No</span>
+          <span className="font-mono text-base font-bold text-rose-400">{noPct}¢</span>
+        </div>
+      </div>
+      <div className="h-px w-full rounded-full overflow-hidden bg-rose-500/20">
+        <div className="h-full bg-emerald-500/60 transition-all" style={{ width: `${yesPct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+// ─── Shared card meta footer ──────────────────────────────────────────────────
+
+function CardFooter({
+  market,
+  live,
+  showSparkline = true,
+}: {
+  market: Market;
+  live: boolean;
+  showSparkline?: boolean;
+}) {
+  const isUp = (market.change24h ?? 0) >= 0;
+
+  return (
+    <div className="flex justify-between items-center pt-3 border-t border-white/5">
+      <div className="flex items-center gap-3 text-xs text-slate-500">
+        <span className="flex items-center gap-1">
+          <Activity className="w-3 h-3" strokeWidth={1.5} />
+          {formatVolume(market.volume)}
+        </span>
+        {market.trending && (
+          <span className="text-slate-400 font-medium">Trending</span>
+        )}
+      </div>
+
+      <div className="flex items-center gap-3">
+        {showSparkline && market.priceHistory && market.priceHistory.length >= 2 && (
+          <MiniChart
+            data={market.priceHistory}
+            positive={isUp}
+            width={56}
+            height={24}
+          />
+        )}
+
+        {market.change24h !== undefined && (
+          <span className={`text-xs font-mono font-medium tabular-nums ${isUp ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {isUp ? '+' : ''}{(market.change24h * 100).toFixed(1)}%
+          </span>
+        )}
+
+        {live ? (
+          <span className="flex items-center gap-1 text-slate-400 group-hover:text-white transition-colors text-xs">
+            {formatTimeRemaining(market.expiryAt)} left
+            <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
+          </span>
+        ) : (
+          <Star className="w-3.5 h-3.5 text-slate-600 hover:text-amber-400 cursor-pointer transition-colors" strokeWidth={1.5} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Highlight card (first / featured) ───────────────────────────────────────
 
 function HighlightCard({ market, index }: { market: Market; index: number }) {
-  const { openBetSlip } = useBetSlip();
-  const live      = isLiveMarket(market.id);
-  const yesPct    = Math.round(market.yesPrice * 100);
-  const noPct     = 100 - yesPct;
-  const catStyle  = getCategoryStyle(market.category);
-  const isUp      = (market.change24h ?? 0) >= 0;
+  const live = isLiveMarket(market.id);
 
   return (
     <motion.div
@@ -143,118 +168,44 @@ function HighlightCard({ market, index }: { market: Market; index: number }) {
     >
       <Link
         href={`/markets/${market.id}`}
-        className={`group relative block bg-slate-900/50 rounded-2xl border-l-4 ${catStyle.border} border border-white/5 hover:border-white/10 p-5 transition-all duration-300`}
+        className={`group relative block bg-slate-900/60 rounded-xl border-l-2 ${categoryBorder(market.category)} border border-white/5 hover:border-white/10 p-5 transition-all duration-200`}
       >
-        {/* Category glow overlay on hover */}
-        <div className={`absolute inset-0 rounded-2xl bg-linear-to-br ${catStyle.glow} to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none`} />
-        {/* Indigo glow edge */}
-        <div className="absolute -inset-0.5 bg-linear-to-r from-indigo-500/0 via-indigo-500/0 to-indigo-500/0 group-hover:from-indigo-500/10 group-hover:via-indigo-500/5 rounded-2xl blur opacity-0 group-hover:opacity-100 transition duration-300 pointer-events-none" />
-
-        <div className="relative space-y-5">
+        <div className="space-y-4">
           {/* Header */}
-          <div className="flex gap-4">
-            <div className="w-12 h-12 rounded-xl bg-slate-800 flex items-center justify-center overflow-hidden shrink-0 border border-white/5">
+          <div className="flex gap-3.5">
+            <div className="w-10 h-10 rounded-lg bg-slate-800 flex items-center justify-center overflow-hidden shrink-0 border border-white/5">
               {market.image ? (
                 <img src={market.image} alt="" className="w-full h-full object-cover" />
               ) : (
-                <span className="text-indigo-400 font-bold text-sm">
-                  {market.category.slice(0, 2)}
+                <span className="text-slate-400 font-semibold text-xs">
+                  {market.category.slice(0, 2).toUpperCase()}
                 </span>
               )}
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 mb-1">
                 {live && (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/15">
                     <Zap className="h-2.5 w-2.5" />
                     Live
                   </span>
                 )}
-                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${catStyle.badge}`}>
-                  {market.category}
-                </span>
+                <span className="text-xs text-slate-500">{market.category}</span>
               </div>
-              <h3 className="text-xl font-semibold text-white tracking-tight leading-tight">
+              <h3 className="text-lg font-semibold text-white leading-snug tracking-tight">
                 {market.title}
               </h3>
             </div>
           </div>
 
-          {/* Prices */}
+          {/* Price display */}
           {live ? (
             <LivePriceDisplay market={market} />
           ) : (
-            <div className="grid grid-cols-2 gap-4">
-              <button
-                onClick={(e) => { e.preventDefault(); openBetSlip(market, 'YES'); }}
-                className="bg-slate-800/50 rounded-xl p-4 flex flex-col items-center justify-center border border-white/5 hover:border-emerald-500/30 transition-colors cursor-pointer relative overflow-hidden"
-              >
-                <div className="absolute inset-x-0 bottom-0 h-1 bg-emerald-500/20">
-                  <div className="h-full bg-emerald-500" style={{ width: `${yesPct}%` }} />
-                </div>
-                <CircularProgress value={market.yesPrice} color="yes" size={80} showChange={market.change24h} />
-                <span className="text-emerald-400 font-semibold text-lg mt-2">Yes</span>
-              </button>
-
-              <button
-                onClick={(e) => { e.preventDefault(); openBetSlip(market, 'NO'); }}
-                className="bg-slate-800/50 rounded-xl p-4 flex flex-col items-center justify-center border border-white/5 hover:border-rose-500/30 transition-colors cursor-pointer relative overflow-hidden"
-              >
-                <div className="absolute inset-x-0 bottom-0 h-1 bg-rose-500/20">
-                  <div className="h-full bg-rose-500" style={{ width: `${noPct}%` }} />
-                </div>
-                <CircularProgress value={market.noPrice} color="no" size={80} />
-                <span className="text-rose-400 font-semibold text-lg mt-2">No</span>
-              </button>
-            </div>
+            <PriceButtons market={market} size="md" />
           )}
 
-          {/* Footer */}
-          <div className="flex justify-between items-center pt-2 border-t border-white/5">
-            <div className="flex items-center gap-4 text-xs text-slate-500">
-              <span className="flex items-center gap-1">
-                <Activity className="w-3 h-3" strokeWidth={1.5} />
-                {formatVolume(market.volume)} Vol
-              </span>
-              {market.trending && (
-                <span className="text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded text-[10px] font-semibold">
-                  Trending
-                </span>
-              )}
-            </div>
-
-            <div className="flex items-center gap-3">
-              {/* Sparkline */}
-              {market.priceHistory && market.priceHistory.length >= 2 && (
-                <MiniChart
-                  data={market.priceHistory}
-                  positive={isUp}
-                  width={64}
-                  height={28}
-                />
-              )}
-              {/* 24h change */}
-              {market.change24h !== undefined && (
-                <span className={`flex items-center gap-0.5 text-xs font-medium ${isUp ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {isUp ? <TrendingUp className="w-3 h-3" strokeWidth={2} /> : <TrendingDown className="w-3 h-3" strokeWidth={2} />}
-                  {isUp ? '+' : ''}{(market.change24h * 100).toFixed(1)}%
-                </span>
-              )}
-              {live ? (
-                <span className="flex items-center gap-1 text-indigo-400 group-hover:text-indigo-300 transition-colors font-medium text-xs">
-                  View <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
-                </span>
-              ) : (
-                <div className="flex gap-3 text-xs text-slate-500">
-                  <span className="flex items-center gap-1">
-                    <MessageCircle className="w-3 h-3" strokeWidth={1.5} />
-                    {market.tradersCount}
-                  </span>
-                  <Star className="w-3 h-3 hover:text-amber-400 cursor-pointer" strokeWidth={1.5} />
-                </div>
-              )}
-            </div>
-          </div>
+          <CardFooter market={market} live={live} showSparkline />
         </div>
       </Link>
     </motion.div>
@@ -264,12 +215,7 @@ function HighlightCard({ market, index }: { market: Market; index: number }) {
 // ─── Compact card ─────────────────────────────────────────────────────────────
 
 function CompactCard({ market, index }: { market: Market; index: number }) {
-  const { openBetSlip } = useBetSlip();
-  const live      = isLiveMarket(market.id);
-  const yesPct    = Math.round(market.yesPrice * 100);
-  const noPct     = 100 - yesPct;
-  const catStyle  = getCategoryStyle(market.category);
-  const isUp      = (market.change24h ?? 0) >= 0;
+  const live = isLiveMarket(market.id);
 
   return (
     <motion.div
@@ -279,98 +225,45 @@ function CompactCard({ market, index }: { market: Market; index: number }) {
     >
       <Link
         href={`/markets/${market.id}`}
-        className={`group block bg-slate-900 border-l-4 ${catStyle.border} border border-white/5 rounded-2xl p-5 hover:border-white/10 transition-all duration-200`}
+        className={`group block bg-slate-900 border-l-2 ${categoryBorder(market.category)} border border-white/5 rounded-xl p-4 hover:border-white/10 transition-all duration-200`}
       >
-        {/* Subtle category glow on hover */}
-        <div className={`absolute inset-0 rounded-2xl bg-linear-to-br ${catStyle.glow} to-transparent opacity-0 group-hover:opacity-60 transition-opacity duration-300 pointer-events-none`} />
-
         {/* Header */}
         <div className="flex gap-3 mb-4">
-          <div className="w-10 h-10 rounded-lg bg-slate-800 flex items-center justify-center overflow-hidden shrink-0 border border-white/5">
+          <div className="w-9 h-9 rounded-lg bg-slate-800 flex items-center justify-center overflow-hidden shrink-0 border border-white/5">
             {market.image ? (
               <img src={market.image} alt="" className="w-full h-full object-cover" />
             ) : (
-              <span className="text-indigo-400 font-bold text-xs">
-                {market.category.slice(0, 2)}
+              <span className="text-slate-400 font-semibold text-[10px]">
+                {market.category.slice(0, 2).toUpperCase()}
               </span>
             )}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 mb-1">
               {live && (
-                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">
+                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/15">
                   <Zap className="h-2.5 w-2.5" />
                   Live
                 </span>
               )}
-              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${catStyle.badge}`}>
-                {market.category}
-              </span>
+              <span className="text-xs text-slate-500">{market.category}</span>
             </div>
-            <h3 className="text-sm font-semibold text-white tracking-tight leading-tight line-clamp-2">
+            <h3 className="text-sm font-semibold text-white leading-snug tracking-tight line-clamp-2">
               {market.title}
             </h3>
           </div>
         </div>
 
-        {/* Prices */}
-        {live ? (
-          <div className="mb-4">
+        {/* Price display */}
+        <div className="mb-4">
+          {live ? (
             <LivePriceDisplay market={market} />
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-3 mb-4">
-            <button
-              onClick={(e) => { e.preventDefault(); openBetSlip(market, 'YES'); }}
-              className="bg-slate-800/30 rounded-lg p-3 flex flex-col items-center border border-white/5 hover:bg-slate-800/60 hover:border-emerald-500/20 transition-all cursor-pointer"
-            >
-              <CircularProgress value={market.yesPrice} color="yes" size={56} />
-              <span className="text-emerald-400 font-semibold text-sm mt-1">Yes</span>
-            </button>
-            <button
-              onClick={(e) => { e.preventDefault(); openBetSlip(market, 'NO'); }}
-              className="bg-slate-800/30 rounded-lg p-3 flex flex-col items-center border border-white/5 hover:bg-slate-800/60 hover:border-rose-500/20 transition-all cursor-pointer"
-            >
-              <CircularProgress value={market.noPrice} color="no" size={56} />
-              <span className="text-rose-400 font-semibold text-sm mt-1">No</span>
-            </button>
-          </div>
-        )}
-
-        {/* Footer */}
-        <div className="flex justify-between items-center pt-3 border-t border-white/5">
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            <Activity className="w-3 h-3" strokeWidth={1.5} />
-            <span>{formatVolume(market.volume)}</span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {/* Sparkline */}
-            {market.priceHistory && market.priceHistory.length >= 2 && (
-              <MiniChart
-                data={market.priceHistory}
-                positive={isUp}
-                width={52}
-                height={24}
-              />
-            )}
-            {live ? (
-              <span className="flex items-center gap-1 text-indigo-400 group-hover:text-indigo-300 transition-colors font-medium text-xs">
-                {formatTimeRemaining(market.expiryAt)} left
-                <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
-              </span>
-            ) : (
-              <div className="flex gap-2 text-xs text-slate-500">
-                {market.change24h !== undefined && (
-                  <span className={`font-medium ${isUp ? 'text-emerald-400' : 'text-rose-400'}`}>
-                    {isUp ? '+' : ''}{(market.change24h * 100).toFixed(1)}%
-                  </span>
-                )}
-                <Star className="w-3 h-3 hover:text-amber-400 cursor-pointer" strokeWidth={1.5} />
-              </div>
-            )}
-          </div>
+          ) : (
+            <PriceButtons market={market} size="sm" />
+          )}
         </div>
+
+        <CardFooter market={market} live={live} showSparkline />
       </Link>
     </motion.div>
   );

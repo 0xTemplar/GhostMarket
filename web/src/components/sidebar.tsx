@@ -1,15 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import { Wallet, Star, ChevronRight, TrendingUp, Users, BarChart2, Shield } from 'lucide-react';
+import { Wallet, Star, ChevronRight } from 'lucide-react';
 
 // ─── Platform stats ────────────────────────────────────────────────────────────
 
 const PLATFORM_STATS = [
-  { label: '24h Volume',  value: '$1.4M',  icon: TrendingUp, color: 'text-indigo-400',  bg: 'bg-indigo-500/10'  },
-  { label: 'Traders',     value: '18.4K',  icon: Users,      color: 'text-violet-400',  bg: 'bg-violet-500/10'  },
-  { label: 'Markets',     value: '47',     icon: BarChart2,  color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
-  { label: 'Shielded',    value: '100%',   icon: Shield,     color: 'text-cyan-400',    bg: 'bg-cyan-500/10'    },
+  { label: '24h Vol',  value: '$1.4M' },
+  { label: 'Traders',  value: '18.4K' },
+  { label: 'Markets',  value: '47'    },
+  { label: 'Private',  value: '100%'  },
 ];
 
 // ─── Trending topics ───────────────────────────────────────────────────────────
@@ -61,25 +61,19 @@ export function Sidebar() {
     <div className="space-y-5">
 
       {/* ── Platform stats ── */}
-      <div className="bg-slate-900 rounded-2xl p-5 border border-white/5">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="font-semibold text-white text-sm">Platform</h3>
-          <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+      <div className="bg-slate-900 rounded-xl px-4 py-3.5 border border-white/5">
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Platform</span>
+          <span className="flex items-center gap-1 text-[10px] text-slate-500">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             Live
           </span>
         </div>
-        <div className="grid grid-cols-2 gap-2.5">
+        <div className="grid grid-cols-4 divide-x divide-white/5">
           {PLATFORM_STATS.map((stat) => (
-            <div
-              key={stat.label}
-              className="bg-slate-800/50 rounded-xl p-3 border border-white/5 hover:border-white/10 transition-colors"
-            >
-              <div className={`${stat.bg} w-7 h-7 rounded-lg flex items-center justify-center mb-2`}>
-                <stat.icon className={`w-3.5 h-3.5 ${stat.color}`} strokeWidth={1.5} />
-              </div>
-              <div className={`text-base font-bold leading-tight ${stat.color}`}>{stat.value}</div>
-              <div className="text-[10px] text-slate-500 mt-0.5">{stat.label}</div>
+            <div key={stat.label} className="px-2 first:pl-0 last:pr-0 text-center">
+              <div className="text-sm font-bold text-white tabular-nums">{stat.value}</div>
+              <div className="text-[10px] text-slate-500 mt-0.5 leading-tight">{stat.label}</div>
             </div>
           ))}
         </div>
