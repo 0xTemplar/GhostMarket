@@ -95,39 +95,53 @@ let _fhevmInstance: FhevmInstance | null = null;
 
 /**
  * Lazily initialise the @zama-fhe/relayer-sdk instance.
- * Uses SepoliaConfig (built-in) for all FHEVM contract addresses and gateway.
- * Call once per session; subsequent calls return the cached instance.
+ *
+ * Uses the SDK's bundled SepoliaConfig so contract addresses are always
+ * in sync with the deployed Zama infrastructure — no manual address
+ * management required.  Falls back to SepoliaConfigV2 if the base
+ * relayer URL is unavailable (the v2 endpoint is served at /v2 and is
+ * more stable under load).
+ *
+ * The singleton is cleared on failure so a page-level retry re-initialises
+ * rather than returning a broken instance.
  *
  * Optional env var:
  *   NEXT_PUBLIC_SEPOLIA_RPC_URL — private Alchemy/Infura RPC for reliability.
  *
  * Docs: https://docs.zama.org/protocol/relayer-sdk-guides/fhevm-relayer/initialization
- *
- * @param provider  EIP-1193 provider (unused with relayer-sdk but kept for API compatibility).
  */
-export async function initFhevm(provider: unknown): Promise<FhevmInstance> {
+export async function initFhevm(_provider?: unknown): Promise<FhevmInstance> {
   if (_fhevmInstance) return _fhevmInstance;
 
-  // Dynamic import keeps the SDK out of the SSR bundle entirely.
-  // Use the /web subpath — tree-shakes Node.js internals out of the browser bundle.
-  const { createInstance } = await import('@zama-fhe/relayer-sdk/web');
+  // Dynamic import keeps the SDK + its WASM out of the SSR bundle entirely.
+  const { createInstance, SepoliaConfig, SepoliaConfigV2, initSDK } =
+    await import('@zama-fhe/relayer-sdk/web');
 
-  // These addresses match @fhevm/solidity ZamaConfig.sol used when GhostEAMM was compiled.
-  // The SDK's built-in SepoliaConfig points to a newer, not-yet-live deployment.
-  // Source: https://docs.zama.org/protocol/solidity-guides/smart-contract/configure/contract_addresses
-  _fhevmInstance = await createInstance({
-    aclContractAddress:                        '0xf0Ffdc93b7E186bC2f8CB3dAA75D86d1930A433D',
-    kmsContractAddress:                        '0xbE0E383937d564D7FF0BC3b46c51f0bF8d5C311A',
-    inputVerifierContractAddress:              '0xBBC1fFCdc7C316aAAd72E807D9b0272BE8F84DA0',
-    verifyingContractAddressDecryption:        '0x5D8BD78e2ea6bbE41f26dFe9fdaEAa349e077478',
-    verifyingContractAddressInputVerification: '0x483b9dE06E4E4C7D35CCf5837A1668487406D955',
-    chainId:        11155111,
-    gatewayChainId: 10901,
-    relayerUrl:     'https://relayer.testnet.zama.org',
-    network:        process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL ?? 'https://rpc.sepolia.org',
-  });
+  // initSDK() MUST be called before createInstance().
+  // It fetches and instantiates both WASM modules (tfhe_bg.wasm + kms_lib_bg.wasm).
+  // Without this, wasm$1.__wbindgen_malloc is undefined and all crypto calls crash
+  // with the misleading "wrong relayer url" error message.
+  await initSDK();
+
+  const network =
+    process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL ?? 'https://rpc.sepolia.org';
+
+  // Try base SepoliaConfig first; if the relayer is unreachable fall back
+  // to the versioned /v2 endpoint which has been more stable in practice.
+  try {
+    _fhevmInstance = await createInstance({ ...SepoliaConfig, network });
+  } catch {
+    _fhevmInstance = null; // ensure we don't cache a broken instance
+    _fhevmInstance = await createInstance({ ...SepoliaConfigV2, network });
+  }
 
   return _fhevmInstance;
+}
+
+/** Clear the cached instance — call this if encryption fails so the next
+ *  attempt re-initialises rather than reusing a potentially broken instance. */
+export function resetFhevmInstance(): void {
+  _fhevmInstance = null;
 }
 
 // ─── Encryption ───────────────────────────────────────────────────────────────

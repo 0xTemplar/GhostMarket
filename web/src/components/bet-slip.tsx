@@ -14,10 +14,12 @@ import {
   encryptBetInput,
   placeEncryptedBet,
   buildZamaWalletClient,
+  resetFhevmInstance,
   toWei,
   isEammDeployed,
   GHOST_EAMM_ADDRESS,
 } from '@/lib/flow/eamm';
+import { lockBetCollateral, readLockedAmount } from '@/lib/flow/vault';
 
 interface BetSlipProps {
   market: Market;
@@ -28,8 +30,9 @@ interface BetSlipProps {
 
 type TxState =
   | { phase: 'idle' }
-  | { phase: 'encrypting' }
-  | { phase: 'signing' }
+  | { phase: 'locking' }                       // locking collateral on Flow EVM
+  | { phase: 'encrypting' }                    // encrypting amount with fhevmjs
+  | { phase: 'signing' }                       // awaiting wallet sig for placeBet
   | { phase: 'pending'; hash: string }
   | { phase: 'success'; hash: string; shielded?: boolean }
   | { phase: 'error'; message: string };
@@ -78,7 +81,44 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
   }, [side, amount]);
 
   // ─── Shielded path (eAMM on Zama / Ethereum Sepolia) ───────────────────────
+  //
+  // Two-layer flow:
+  //   Layer 1 (Flow EVM) — lock collateral in GhostVault so the stake cannot
+  //                         be withdrawn before settlement.
+  //   Layer 2 (Zama)     — encrypt the bet amount and submit to GhostEAMM so
+  //                         position size is invisible to other participants.
   const handleShieldedSubmit = async () => {
+    const amountWei = toWei(amount);
+
+    // ── Layer 1: lock collateral on Flow EVM ──────────────────────────────────
+    // Skip if a lock already exists (e.g. a previous attempt locked successfully
+    // but the Sepolia step failed — the user is retrying the same market).
+    setTxState({ phase: 'locking' });
+    try {
+      if (!walletClient) throw new Error('Flow EVM wallet not ready. Please wait and try again.');
+
+      const userAddress = (user.evmAddress ?? '') as `0x${string}`;
+      const { publicClient: flowPublicClient } = await import('@/lib/flow/vault');
+
+      const alreadyLocked = userAddress
+        ? await readLockedAmount(userAddress, Number(market.id))
+        : '0';
+
+      if (parseFloat(alreadyLocked) === 0) {
+        const lockHash = await lockBetCollateral(walletClient, Number(market.id), amountWei);
+        await flowPublicClient.waitForTransactionReceipt({ hash: lockHash });
+      }
+      // If already locked: skip the tx and proceed to the Sepolia step.
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error
+          ? (err.message.includes('User rejected') ? 'Lock cancelled.' : err.message.slice(0, 160))
+          : 'Collateral lock failed.';
+      setTxState({ phase: 'error', message });
+      return;
+    }
+
+    // ── Layer 2: encrypt + submit to GhostEAMM on Sepolia ────────────────────
     setTxState({ phase: 'encrypting' });
     try {
       // Get the Privy embedded wallet and switch it to Sepolia (11155111).
@@ -88,34 +128,43 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
       const embeddedWallet = wallets.find((w) => w.walletClientType === 'privy');
       if (!embeddedWallet) throw new Error('Privy embedded wallet not found. Try logging out and back in.');
 
-      // Switch embedded wallet to Sepolia before requesting the provider.
       await embeddedWallet.switchChain(11155111);
       const provider = await embeddedWallet.getEthereumProvider();
 
       const userAddress = (user.evmAddress ?? embeddedWallet.address) as `0x${string}`;
 
-      // 1. Encrypt the bet amount client-side using @zama-fhe/relayer-sdk.
-      //    The provider is not used by initFhevm (relayer-sdk uses RPC URL),
-      //    but passing it maintains the function signature.
-      const amountWei = toWei(amount);
+      // Encrypt the bet amount client-side — plaintext never leaves the browser.
       const encrypted = await encryptBetInput(provider, GHOST_EAMM_ADDRESS, userAddress, amountWei);
 
-      // 2. Sign + submit to GhostEAMM on Ethereum Sepolia.
+      // Sign + submit to GhostEAMM on Ethereum Sepolia.
       setTxState({ phase: 'signing' });
       const zamaWallet = buildZamaWalletClient(provider);
       const hash = await placeEncryptedBet(zamaWallet, Number(market.id), side === 'YES', encrypted);
 
       setTxState({ phase: 'pending', hash });
 
-      // 3. Poll for confirmation on Sepolia.
+      // Poll for confirmation on Sepolia.
       const { zamaPublicClient } = await import('@/lib/flow/eamm');
       await zamaPublicClient.waitForTransactionReceipt({ hash });
       setTxState({ phase: 'success', hash, shielded: true });
     } catch (err: unknown) {
-      const message =
-        err instanceof Error
-          ? (err.message.includes('User rejected') ? 'Transaction rejected.' : err.message.slice(0, 160))
-          : 'Encrypted bet failed.';
+      // Reset the fhevm singleton so the next retry re-initialises the SDK
+      // rather than reusing a potentially broken or stale instance.
+      resetFhevmInstance();
+      let message = 'Encrypted bet failed.';
+      if (err instanceof Error) {
+        if (err.message.includes('User rejected')) {
+          message = 'Transaction rejected.';
+        } else if (err.message.includes('0x4cba20ef')) {
+          message = 'This market is not yet registered on GhostEAMM. Run sync-markets-to-eamm.ts to mirror it to Sepolia.';
+        } else if (err.message.includes('0x5404ee68')) {
+          message = 'Market is not active — it may be resolved or cancelled.';
+        } else if (err.message.includes('0xc13cc0ca')) {
+          message = 'Market has expired and no longer accepts bets.';
+        } else {
+          message = err.message.slice(0, 160);
+        }
+      }
       setTxState({ phase: 'error', message });
     }
   };
@@ -155,7 +204,7 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
   };
 
   const quickAmounts = [1, 5, 10, 25];
-  const isBusy   = txState.phase === 'encrypting' || txState.phase === 'signing' || txState.phase === 'pending';
+  const isBusy   = txState.phase === 'locking' || txState.phase === 'encrypting' || txState.phase === 'signing' || txState.phase === 'pending';
   const currency = onChain ? 'FLOW' : '$';
   const scanBase = txState.phase === 'success' && txState.shielded ? SEPOLIASCAN_BASE : FLOWSCAN_BASE;
 
@@ -223,7 +272,7 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                   <h3 className="text-lg font-bold text-white">Order Confirmed</h3>
                   <p className="mt-2 text-sm text-slate-400 max-w-xs">
                     {txState.phase === 'success' && txState.shielded
-                      ? `Your shielded ${side} position is recorded on Zama fhevm. Amount is encrypted.`
+                      ? `Collateral locked on Flow EVM · ${side} position encrypted on Zama fhevm. Position size is hidden from all participants.`
                       : `Your ${side} position on this market has been recorded on Flow EVM.`}
                   </p>
                   {txState.hash && txState.hash !== '0xmock' && (
@@ -426,11 +475,21 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                       <Shield className="h-4 w-4 text-indigo-400 mt-0.5 shrink-0" />
                       <p className="text-xs text-indigo-300 leading-relaxed">
                         {onChain && shieldedMode && isEammDeployed()
-                          ? 'Amount is encrypted via fhevmjs before submission. Position size is never publicly readable on-chain.'
+                          ? 'Two-step: stake is locked on Flow EVM as collateral, then amount is encrypted with FHE before submission. Position size is invisible to all other market participants.'
                           : onChain
-                          ? 'Executing on Flow EVM (public). Enable Shielded mode to hide your bet size.'
+                          ? 'Executing on Flow EVM (public). Enable Shielded mode to lock collateral and hide your bet size.'
                           : 'Shielded by default — order size and intent are encrypted before execution.'}
                       </p>
+                    </div>
+                  )}
+
+                  {/* Locking collateral notice */}
+                  {txState.phase === 'locking' && (
+                    <div className="flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 p-3">
+                      <Loader2 className="h-4 w-4 text-amber-400 animate-spin shrink-0" />
+                      <span className="text-xs text-amber-300">
+                        Locking collateral on Flow EVM…
+                      </span>
                     </div>
                   )}
 
@@ -459,7 +518,12 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                       disabled={!isValid || isBusy}
                       className="w-full h-12 rounded-lg bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold flex items-center justify-center gap-2 transition-colors"
                     >
-                      {txState.phase === 'encrypting' ? (
+                      {txState.phase === 'locking' ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Locking collateral…
+                        </>
+                      ) : txState.phase === 'encrypting' ? (
                         <>
                           <Loader2 className="h-4 w-4 animate-spin" />
                           Encrypting…

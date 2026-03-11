@@ -6,7 +6,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import {
   ArrowLeft, Clock, Users, BarChart3, Droplets, Shield, ExternalLink,
-  Flame, TrendingUp, TrendingDown, Loader2, AlertCircle, RefreshCw,
+  Flame, TrendingUp, TrendingDown, Loader2, AlertCircle, RefreshCw, Lock,
 } from 'lucide-react';
 import { mockMarkets } from '@/data/markets';
 import type { Market } from '@/types/market';
@@ -21,6 +21,10 @@ import {
   readMarket, toFrontendMarket, type OnChainMarket,
   claimWinnings, claimRefund, readUserPosition, readIsRefundEligible,
 } from '@/lib/flow/market';
+import {
+  readEammPositionHandles, readEammMarketMeta, isEammDeployed,
+} from '@/lib/flow/eamm';
+import { readLockedAmount } from '@/lib/flow/vault';
 import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -45,6 +49,12 @@ function OnChainActions({
   const [posLoading, setPosLoading] = useState(false);
   const [userPos, setUserPos] = useState<{ yes: string; no: string; claimed: boolean } | null>(null);
   const [refundEligible, setRefundEligible] = useState(false);
+  const [shieldedPos, setShieldedPos] = useState<{
+    hasYes: boolean;
+    hasNo: boolean;
+    locked: string;   // FLOW locked as collateral in GhostVault
+    side: string;     // 'YES' | 'NO' | 'YES + NO'
+  } | null>(null);
   const [actionState, setActionState] = useState<
     | { phase: 'idle' }
     | { phase: 'loading' }
@@ -56,14 +66,24 @@ function OnChainActions({
     if (!user.evmAddress) return;
     setPosLoading(true);
     try {
-      const [pos, eligible] = await Promise.all([
-        readUserPosition(raw.id, user.evmAddress as `0x${string}`),
+      const addr = user.evmAddress as `0x${string}`;
+      const zero = '0x' + '0'.repeat(64);
+
+      const [pos, eligible, handles, locked] = await Promise.all([
+        readUserPosition(raw.id, addr),
         readIsRefundEligible(raw.id),
+        isEammDeployed()
+          ? readEammPositionHandles(raw.id, addr).catch(() => null)
+          : Promise.resolve(null),
+        isEammDeployed()
+          ? readLockedAmount(addr, raw.id)
+          : Promise.resolve('0'),
       ]);
+
       if (pos) {
         setUserPos({
-          yes: parseFloat(pos.totalFlow) > 0
-            ? `YES: ${parseFloat(pos.yesAmount > 0n ? (Number(pos.yesAmount) / 1e18).toFixed(4) : '0')} FLOW`
+          yes: pos.yesAmount > 0n
+            ? `YES: ${(Number(pos.yesAmount) / 1e18).toFixed(4)} FLOW`
             : '',
           no: pos.noAmount > 0n
             ? `NO: ${(Number(pos.noAmount) / 1e18).toFixed(4)} FLOW`
@@ -71,6 +91,16 @@ function OnChainActions({
           claimed: pos.claimed,
         });
       }
+
+      if (handles) {
+        const hasYes = handles.yesHandle !== zero;
+        const hasNo  = handles.noHandle  !== zero;
+        if (hasYes || hasNo) {
+          const side = hasYes && hasNo ? 'YES + NO' : hasYes ? 'YES' : 'NO';
+          setShieldedPos({ hasYes, hasNo, locked, side });
+        }
+      }
+
       setRefundEligible(eligible);
     } finally {
       setPosLoading(false);
@@ -119,22 +149,48 @@ function OnChainActions({
           <Loader2 className="h-4 w-4 animate-spin" />
           Loading…
         </div>
-      ) : userPos?.yes || userPos?.no ? (
-        <div className="space-y-2">
-          {userPos.yes && (
-            <div className="flex items-center gap-2 text-sm">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
-              <span className="text-slate-300 font-mono">{userPos.yes}</span>
+      ) : userPos?.yes || userPos?.no || shieldedPos ? (
+        <div className="space-y-3">
+          {/* Public on-chain position */}
+          {(userPos?.yes || userPos?.no) && (
+            <div className="space-y-2">
+              {userPos!.yes && (
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                  <span className="text-slate-300 font-mono">{userPos!.yes}</span>
+                </div>
+              )}
+              {userPos!.no && (
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="h-2 w-2 rounded-full bg-rose-500" />
+                  <span className="text-slate-300 font-mono">{userPos!.no}</span>
+                </div>
+              )}
+              {userPos!.claimed && (
+                <p className="text-xs text-emerald-400">✓ Claimed</p>
+              )}
             </div>
           )}
-          {userPos.no && (
-            <div className="flex items-center gap-2 text-sm">
-              <span className="h-2 w-2 rounded-full bg-rose-500" />
-              <span className="text-slate-300 font-mono">{userPos.no}</span>
+
+          {/* Shielded position on GhostEAMM */}
+          {shieldedPos && (
+            <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-3 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Lock className="h-3.5 w-3.5 text-indigo-400" />
+                <span className="text-xs font-semibold text-indigo-400 uppercase tracking-wide">
+                  Shielded ({shieldedPos.side})
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Bet amount is FHE-encrypted on the eAMM — exact size is private.
+              </p>
+              {parseFloat(shieldedPos.locked) > 0 && (
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="text-slate-500">Collateral locked:</span>
+                  <span className="font-mono text-amber-400">{parseFloat(shieldedPos.locked).toFixed(4)} FLOW</span>
+                </div>
+              )}
             </div>
-          )}
-          {userPos.claimed && (
-            <p className="text-xs text-emerald-400 mt-1">✓ Claimed</p>
           )}
         </div>
       ) : (
@@ -486,9 +542,7 @@ export default function MarketDetailPage() {
                 <div className="mt-4 flex items-start gap-2 rounded-lg bg-indigo-500/10 p-3">
                   <Shield className="h-4 w-4 text-indigo-400 mt-0.5 shrink-0" />
                   <p className="text-xs text-indigo-300 leading-relaxed">
-                    {rawMarket
-                      ? 'Orders settle on Flow EVM. FHE-encrypted eAMM launches in Phase 4.'
-                      : 'Orders are shielded — position size and intent are encrypted before execution on the eAMM.'}
+                    Orders are shielded — position size and intent are FHE-encrypted before execution on the eAMM.
                   </p>
                 </div>
               </div>
