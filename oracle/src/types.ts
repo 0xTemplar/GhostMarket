@@ -1,0 +1,71 @@
+// ── Agent state ────────────────────────────────────────────────────────────────
+
+export type AgentStatus =
+  | 'idle'
+  | 'fetching'
+  | 'attesting'
+  | 'submitted'
+  | 'slashed'
+  | 'suspended';
+
+export interface OracleAgent {
+  id: number;           // 1–7
+  name: string;         // Ghost-01 … Ghost-07
+  walletAddress: string;
+  reputationScore: number;
+  erc8004Id: bigint | null;
+  status: AgentStatus;
+  vote: boolean | null;
+  storachaCid: string | null;   // intermediate evidence CID (Storacha)
+  filecoinCid: string | null;   // finalized evidence CID (Synapse/Filecoin)
+  attestedAt: number | null;    // unix ms
+}
+
+// ── Resolution session ─────────────────────────────────────────────────────────
+
+export type ResolutionPhase =
+  | 'pending'
+  | 'collecting'
+  | 'quorum_reached'
+  | 'uploading'
+  | 'finalized'
+  | 'failed';
+
+export interface ResolutionSession {
+  marketId: string;
+  phase: ResolutionPhase;
+  agents: OracleAgent[];
+  yesVotes: number;
+  noVotes: number;
+  outcome: boolean | null;
+  finalEvidenceCid: string | null;   // Synapse Piece CID
+  calibrationTxHash: string | null;
+  flowTxHash: string | null;
+  startedAt: number;
+  finalizedAt: number | null;
+  log: LogEntry[];
+}
+
+export interface LogEntry {
+  ts: number;           // unix ms
+  agentName: string | null;
+  message: string;
+  txHash: string | null;
+  cid: string | null;
+}
+
+// ── WebSocket message ──────────────────────────────────────────────────────────
+
+export type WsMessageType =
+  | 'session_init'
+  | 'agent_update'
+  | 'log'
+  | 'quorum_reached'
+  | 'finalized'
+  | 'error';
+
+export interface WsMessage {
+  type: WsMessageType;
+  marketId: string;
+  payload: unknown;
+}

@@ -1,0 +1,73 @@
+{
+  "agent_name": "GhostMarket Oracle Swarm",
+  "version": "1.0.0",
+  "description": "7-agent oracle swarm for confidential prediction market resolution. Agents autonomously fetch outcome data from independent sources, attest YES/NO votes, reach 5-of-7 quorum, and anchor evidence to Filecoin via Synapse SDK. Agent identities are registered in ERC-8004 on Sepolia. Intermediate evidence is checkpointed to Storacha during collection.",
+  "operator_wallet": "0x0000000000000000000000000000000000000000",
+  "erc8004_registry": "eip155:11155111:0x8004A818BFB912233c491871b3d84c89A494BD9e",
+  "oracle_registry": "eip155:314159:{{ORACLE_REGISTRY_ADDRESS}}",
+  "agents": [
+    { "id": 1, "name": "Cipher",  "source": "Binance",   "personality": "Data-driven analyst, trusts top-tier CEX feeds",           "erc8004_id": null },
+    { "id": 2, "name": "Specter", "source": "CoinGecko", "personality": "Cautious risk assessor, requires high-confidence signals",   "erc8004_id": null },
+    { "id": 3, "name": "Wraith",  "source": "Chainlink", "personality": "Speed-optimised, prioritises on-chain oracle feeds",        "erc8004_id": null },
+    { "id": 4, "name": "Phantom", "source": "Coinbase",  "personality": "Contrarian thinker, stress-tests the consensus",            "erc8004_id": null },
+    { "id": 5, "name": "Shade",   "source": "Kraken",    "personality": "Consensus-seeker, cross-references multiple signals",       "erc8004_id": null },
+    { "id": 6, "name": "Echo",    "source": "OKX",       "personality": "Volume-weighted aggregator, weights by 24h trading volume", "erc8004_id": null },
+    { "id": 7, "name": "Vex",     "source": "Bybit",     "personality": "Adversarial tester, looks for manipulation and stale data", "erc8004_id": null }
+  ],
+  "quorum": {
+    "threshold": 5,
+    "total": 7,
+    "rule": "5-of-7 matching attestations"
+  },
+  "supported_tools": [
+    "synapse-sdk",
+    "storacha-client",
+    "erc8004-identity-registry",
+    "erc8004-reputation-registry",
+    "filecoin-calibration",
+    "ethereum-sepolia",
+    "websocket-streaming"
+  ],
+  "supported_tech_stacks": [
+    "TypeScript",
+    "Node.js",
+    "ethers.js",
+    "viem",
+    "@filoz/synapse-sdk",
+    "@storacha/client",
+    "Express",
+    "WebSocket"
+  ],
+  "compute_constraints": {
+    "max_concurrent_agents": 7,
+    "max_resolution_duration_seconds": 120,
+    "agent_decision_timeout_seconds": 30
+  },
+  "supported_task_categories": [
+    "market-resolution",
+    "data-attestation",
+    "quorum-voting",
+    "reputation-tracking",
+    "evidence-anchoring"
+  ],
+  "safety": {
+    "slash_percent": 10,
+    "max_reputation_drop_per_resolution": 10,
+    "auto_suspend_threshold": 0,
+    "fail_closed": true,
+    "replay_protection": true
+  },
+  "decision_loop": [
+    "discover: subscribe to market expiry events",
+    "plan: select data sources per agent",
+    "execute: fetch → attest → submit on-chain",
+    "verify: check quorum status from OracleAgentRegistry",
+    "submit: upload finalized evidence to Filecoin, update reputation"
+  ],
+  "storage": {
+    "intermediate_evidence": "Storacha (fast, UCAN-scoped per agent)",
+    "finalized_evidence": "Filecoin Onchain Cloud via Synapse SDK (permanent, PDP-verified)",
+    "reputation_snapshots": "Filecoin Onchain Cloud via Synapse SDK",
+    "agent_checkpoints": "Storacha (pulled on restart)"
+  }
+}
