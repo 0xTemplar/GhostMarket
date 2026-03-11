@@ -18,7 +18,7 @@ dotenv.config();
 import { getUSDFCBalance, uploadToFilecoin, downloadFromFilecoin } from '../src/synapse-client.js';
 
 async function main() {
-  console.log('\n=== Synapse SDK smoke test (v0.39.0) ===\n');
+  console.log('\n=== Synapse SDK smoke test (v0.39.0, withCDN=true) ===\n');
 
   // ── 1. Wallet balance ────────────────────────────────────────────────────────
   console.log('[1] Fetching USDFC wallet balance...');
@@ -55,18 +55,55 @@ async function main() {
     process.exit(1);
   }
 
-  // ── 3. Download (only for real CIDs) ─────────────────────────────────────────
+  // ── 3. FilCDN URL fetch ───────────────────────────────────────────────────────
   if (!pieceCid.startsWith('placeholder:')) {
-    console.log('\n[3] Downloading by PieceCID...');
+    // The retrieval URL printed above follows: https://{address}.calibration.filcdn.io/{cid}
+    // Reconstruct it from what we know and try fetching via Synapse SDK download (withCDN=true)
+    console.log('\n[3] Fetching via Synapse CDN download (withCDN=true)...');
     try {
       const downloaded = await downloadFromFilecoin(pieceCid);
-      console.log('    ✓ Download succeeded');
+      console.log('    ✓ CDN download succeeded');
       console.log('    Data:', JSON.stringify(downloaded));
     } catch (err) {
-      console.warn('    ⚠  Download failed (provider may need more time):', (err as Error).message);
+      console.warn('    ⚠  CDN download failed (piece may still be propagating):', (err as Error).message);
+    }
+
+    // ── 4. Direct filcdn.io URL probe ──────────────────────────────────────────
+    // Try constructing the filcdn.io URL using provider address from the Synapse storage info.
+    console.log('\n[4] Probing filcdn.io URL directly...');
+    try {
+      const { Synapse, calibration } = await import('@filoz/synapse-sdk');
+      const { privateKeyToAccount } = await import('viem/accounts');
+      const { http } = await import('viem');
+      const account = privateKeyToAccount(process.env.CALIBRATION_PRIVATE_KEY as `0x${string}`);
+      const synapse = Synapse.create({ account, transport: http(process.env.CALIBRATION_RPC_URL ?? 'https://filecoin-calibration.drpc.org'), chain: calibration, withCDN: true, source: 'smoke-test' });
+      const info = await synapse.storage.getStorageInfo();
+      const providers = info.providers ?? [];
+      console.log(`    Found ${providers.length} provider(s)`);
+      for (const p of providers.slice(0, 3)) {
+        const addr = (p as { ownerAddress?: string; address?: string }).ownerAddress
+          ?? (p as { address?: string }).address
+          ?? '';
+        if (!addr) continue;
+        const filcdnUrl = `https://${addr.toLowerCase()}.calibration.filcdn.io/${pieceCid}`;
+        console.log(`    Trying: ${filcdnUrl}`);
+        try {
+          const res = await fetch(filcdnUrl, { signal: AbortSignal.timeout(8000) });
+          console.log(`    → HTTP ${res.status}`);
+          if (res.ok) {
+            const text = await res.text();
+            console.log('    ✓ filcdn.io fetch succeeded:', text.slice(0, 120));
+            break;
+          }
+        } catch (fetchErr) {
+          console.warn(`    → fetch error: ${(fetchErr as Error).message}`);
+        }
+      }
+    } catch (err) {
+      console.warn('    ⚠  filcdn.io probe failed:', (err as Error).message);
     }
   } else {
-    console.log('\n[3] Skipping download (placeholder CID).');
+    console.log('\n[3] Skipping CDN test (placeholder CID).');
   }
 
   console.log('\n=== Smoke test complete ===\n');

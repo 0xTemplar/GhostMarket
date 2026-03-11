@@ -55,6 +55,7 @@ async function getSynapse() {
     account,
     transport: http(rpcURL),
     chain: calibration,
+    withCDN: true,
     source: 'ghost-oracle',
   });
 
@@ -161,6 +162,10 @@ async function uploadOnce(
   if (result.copies.length === 0) {
     const reasons = result.failures.map((f: { error: string }) => f.error).join('; ');
     throw new Error(`all provider uploads failed: ${reasons || 'unknown reason'}`);
+  }
+
+  for (const copy of result.copies as { retrievalUrl: string; providerId: bigint; role: string }[]) {
+    console.log(`[Synapse${withCDN ? '/CDN' : ''}] retrieval URL (${copy.role}): ${copy.retrievalUrl}`);
   }
 
   return result.pieceCid.toString();
@@ -300,7 +305,7 @@ async function uploadToFilecoinPinCoreFlow(
     privateKey,
     rpcUrl,
     chain: calibration,
-    withCDN: false,
+    withCDN: true,
   });
 
   const { rootCid, carBytes } = await buildPinCar(payload, label);
@@ -358,7 +363,7 @@ export async function uploadToFilecoin(
   console.log(`[Synapse] Uploading ${label} (${data.byteLength} bytes) to Filecoin Calibration...`);
 
   try {
-    return await uploadWithRetries(data, label, false);
+    return await uploadWithRetries(data, label, true);
   } catch (err) {
     const firstError = err as Error;
     if (!ENABLE_CDN_FALLBACK) {
@@ -366,9 +371,9 @@ export async function uploadToFilecoin(
       return `placeholder:${label.replace(/\s+/g, '-')}`;
     }
 
-    console.warn(`[Synapse] standard upload failed for ${label}; trying CDN fallback: ${firstError.message}`);
+    console.warn(`[Synapse] CDN upload failed for ${label}; retrying without CDN: ${firstError.message}`);
     try {
-      return await uploadWithRetries(data, label, true);
+      return await uploadWithRetries(data, label, false);
     } catch (fallbackErr) {
       console.warn(`[Synapse] CDN fallback failed for ${label}: ${(fallbackErr as Error).message}`);
       if (ENABLE_PIN_FALLBACK) {
@@ -394,7 +399,7 @@ export async function uploadToFilecoin(
  */
 export async function downloadFromFilecoin(pieceCid: string): Promise<object> {
   const synapse = await getSynapse();
-  const bytes = await synapse.storage.download({ pieceCid, withCDN: false });
+  const bytes = await synapse.storage.download({ pieceCid, withCDN: true });
   // Strip null-byte padding added by padToMinSize before JSON parsing.
   const text = new TextDecoder().decode(bytes).replace(/\0+$/, '');
   return JSON.parse(text);
