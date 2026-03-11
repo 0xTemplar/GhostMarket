@@ -19,19 +19,21 @@ import {
   readEammMarketMeta, readEammPositionHandles, isEammDeployed,
   type EammMarketMeta, type PositionHandles,
 } from '@/lib/flow/eamm';
+import { readLockedAmount } from '@/lib/flow/vault';
 import { formatTimeRemaining, cn } from '@/lib/utils';
 
 // ─── Shielded eAMM position type ─────────────────────────────────────────────
 
 interface ShieldedPosition {
-  marketId:    number;
-  marketTitle: string;        // from GhostMarket.sol (public)
-  yesHandle:   `0x${string}`; // opaque — encrypted by fhevm
-  noHandle:    `0x${string}`; // opaque — encrypted by fhevm
-  meta:        EammMarketMeta;
-  revealed:    boolean;       // true after user-authorised gateway decryption
-  revealedYes: string | null; // plaintext FLOW after reveal
-  revealedNo:  string | null;
+  marketId:      number;
+  marketTitle:   string;        // from GhostMarket.sol (public)
+  yesHandle:     `0x${string}`; // opaque — encrypted by fhevm
+  noHandle:      `0x${string}`; // opaque — encrypted by fhevm
+  meta:          EammMarketMeta;
+  lockedCollateral: string;     // FLOW locked in GhostVault for this market
+  revealed:      boolean;       // true after user-authorised gateway decryption
+  revealedYes:   string | null; // plaintext FLOW after reveal
+  revealedNo:    string | null;
 }
 
 // ─── On-chain position type ───────────────────────────────────────────────────
@@ -114,9 +116,19 @@ function ShieldedPositionRow({
         </div>
 
         <div className="flex items-center gap-6 sm:gap-8 sm:text-right shrink-0">
+          {/* Locked collateral — visible (user's own custody record) */}
+          {parseFloat(pos.lockedCollateral) > 0 && (
+            <div>
+              <div className="text-xs text-slate-500 mb-0.5">Collateral</div>
+              <div className="font-mono text-sm font-semibold text-amber-400">
+                {parseFloat(pos.lockedCollateral).toFixed(4)} FLOW
+              </div>
+            </div>
+          )}
+
           {/* Amount — shielded by default */}
           <div>
-            <div className="text-xs text-slate-500 mb-0.5">Amount</div>
+            <div className="text-xs text-slate-500 mb-0.5">Bet size</div>
             {pos.revealed ? (
               <div className="font-mono text-sm font-semibold text-white">
                 {pos.revealedYes && `${pos.revealedYes} YES`}
@@ -144,6 +156,11 @@ function ShieldedPositionRow({
       {pos.revealed && (
         <p className="mt-3 text-[11px] text-slate-500 border-t border-white/5 pt-3">
           Revealed via Zama gateway decryption. Only you can see this value.
+        </p>
+      )}
+      {parseFloat(pos.lockedCollateral) > 0 && (
+        <p className="mt-3 text-[11px] text-amber-500/60 border-t border-white/5 pt-3">
+          {parseFloat(pos.lockedCollateral).toFixed(4)} FLOW locked as collateral on Flow EVM — released at settlement.
         </p>
       )}
     </motion.div>
@@ -326,16 +343,20 @@ export default function PortfolioPage() {
             );
             const zero = '0x' + '0'.repeat(64);
             if (handles.yesHandle === zero && handles.noHandle === zero) return;
-            const meta = await readEammMarketMeta(market.id);
+            const [meta, lockedCollateral] = await Promise.all([
+              readEammMarketMeta(market.id),
+              readLockedAmount(user.evmAddress as `0x${string}`, market.id),
+            ]);
             results.push({
-              marketId:    market.id,
-              marketTitle: market.title,
-              yesHandle:   handles.yesHandle,
-              noHandle:    handles.noHandle,
+              marketId:         market.id,
+              marketTitle:      market.title,
+              yesHandle:        handles.yesHandle,
+              noHandle:         handles.noHandle,
               meta,
-              revealed:    false,
-              revealedYes: null,
-              revealedNo:  null,
+              lockedCollateral,
+              revealed:         false,
+              revealedYes:      null,
+              revealedNo:       null,
             });
           } catch {
             // Market may not exist on eAMM yet — skip silently.

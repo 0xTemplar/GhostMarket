@@ -1,0 +1,58 @@
+[
+  {
+    "id": 1,
+    "name": "Cipher",
+    "address": "0x110Cd85FA8E7329b480355e5E1DA99BE7F28AAB0",
+    "metadataCid": "placeholder:Cipher-metadata",
+    "erc8004Id": "1706",
+    "calibrationTx": ""
+  },
+  {
+    "id": 2,
+    "name": "Specter",
+    "address": "0xEeF50e635bf93293a6AF6414E25AbF13B0c8A551",
+    "metadataCid": "placeholder:Specter-metadata",
+    "erc8004Id": "1707",
+    "calibrationTx": "0xad535561f7985948f0da4337d69172b676654a12afeb6f300af36519afcefd67"
+  },
+  {
+    "id": 3,
+    "name": "Wraith",
+    "address": "0x48F6D48Cfa1aE960bf284e1d7C3c8fA13bC63d88",
+    "metadataCid": "placeholder:Wraith-metadata",
+    "erc8004Id": "1710",
+    "calibrationTx": "0x140ed7255c61e8ff5249419357e809b29c3e7d2c56df4104c708b197e5ee65d7"
+  },
+  {
+    "id": 4,
+    "name": "Phantom",
+    "address": "0x72bf54C6CC1d675ec4dFbdC967469088036d738c",
+    "metadataCid": "placeholder:Phantom-metadata",
+    "erc8004Id": "1711",
+    "calibrationTx": ""
+  },
+  {
+    "id": 5,
+    "name": "Shade",
+    "address": "0x56B081777c83535eca8393B4B2C257a4760B8F13",
+    "metadataCid": "placeholder:Shade-metadata",
+    "erc8004Id": "1712",
+    "calibrationTx": "0x7020b47e4246246be9ad452931e6885a5c3d91f7dfe33f1e639c8f49727c14bd"
+  },
+  {
+    "id": 6,
+    "name": "Echo",
+    "address": "0x7fFf32C29AEE560cD3fD4fF0dB2e2e24A72FA313",
+    "metadataCid": "placeholder:Echo-metadata",
+    "erc8004Id": "1713",
+    "calibrationTx": "0x9d2ad313755c3870c9661752166fd7c2432bf77c7eae5da322599b3da34ae8a6"
+  },
+  {
+    "id": 7,
+    "name": "Vex",
+    "address": "0x4bdE2786588aF5b7beC6Ea9dfA65B6ceFA52B1E1",
+    "metadataCid": "placeholder:Vex-metadata",
+    "erc8004Id": "1714",
+    "calibrationTx": "0xd5f67727753401f03ee2e60a9b4079707432303d209ddb78accca2969a6402aa"
+  }
+]

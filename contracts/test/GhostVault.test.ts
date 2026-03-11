@@ -170,4 +170,166 @@ describe('GhostVault', function () {
       vault.connect(user).withdraw(ethers.parseEther('1'))
     ).to.be.revertedWithCustomError(vault, 'EnforcedPause');
   });
+
+  // ─── Collateral locking ───────────────────────────────────────────────────
+
+  describe('lockForBet', () => {
+    const MARKET_ID = ethers.keccak256(ethers.toUtf8Bytes('market-lock-001'));
+    const DEPOSIT   = ethers.parseEther('1.0');
+    const LOCK      = ethers.parseEther('0.4');
+
+    beforeEach(async () => {
+      await vault.connect(user).deposit({ value: DEPOSIT });
+    });
+
+    it('locks amount and emits BetLocked', async () => {
+      await expect(vault.connect(user).lockForBet(MARKET_ID, LOCK))
+        .to.emit(vault, 'BetLocked')
+        .withArgs(user.address, MARKET_ID, LOCK);
+
+      expect(await vault.lockedAmounts(user.address, MARKET_ID)).to.equal(LOCK);
+      expect(await vault.totalLocked(user.address)).to.equal(LOCK);
+    });
+
+    it('getFreeBalance excludes locked amount', async () => {
+      await vault.connect(user).lockForBet(MARKET_ID, LOCK);
+      const free = await vault.getFreeBalance(user.address);
+      expect(free).to.equal(DEPOSIT - LOCK);
+    });
+
+    it('getBalance still returns total balance including locked', async () => {
+      await vault.connect(user).lockForBet(MARKET_ID, LOCK);
+      expect(await vault.getBalance(user.address)).to.equal(DEPOSIT);
+    });
+
+    it('reverts on zero lock amount', async () => {
+      await expect(
+        vault.connect(user).lockForBet(MARKET_ID, 0)
+      ).to.be.revertedWithCustomError(vault, 'ZeroAmount');
+    });
+
+    it('reverts if insufficient free balance', async () => {
+      const tooMuch = ethers.parseEther('1.5');
+      await expect(
+        vault.connect(user).lockForBet(MARKET_ID, tooMuch)
+      ).to.be.revertedWithCustomError(vault, 'InsufficientBalance');
+    });
+
+    it('reverts if market already has a lock', async () => {
+      await vault.connect(user).lockForBet(MARKET_ID, LOCK);
+      await expect(
+        vault.connect(user).lockForBet(MARKET_ID, ethers.parseEther('0.1'))
+      ).to.be.revertedWithCustomError(vault, 'BetAlreadyLocked');
+    });
+
+    it('allows locking separate amounts for different markets', async () => {
+      const MARKET_ID_2 = ethers.keccak256(ethers.toUtf8Bytes('market-lock-002'));
+      await vault.connect(user).lockForBet(MARKET_ID,   ethers.parseEther('0.3'));
+      await vault.connect(user).lockForBet(MARKET_ID_2, ethers.parseEther('0.3'));
+
+      expect(await vault.totalLocked(user.address)).to.equal(ethers.parseEther('0.6'));
+      expect(await vault.getFreeBalance(user.address)).to.equal(ethers.parseEther('0.4'));
+    });
+
+    it('locked balance blocks withdrawal of locked funds', async () => {
+      await vault.connect(user).lockForBet(MARKET_ID, LOCK);
+      // Free = 0.6 FLOW, so withdrawing 0.7 FLOW should fail
+      await expect(
+        vault.connect(user).withdraw(ethers.parseEther('0.7'))
+      ).to.be.revertedWithCustomError(vault, 'InsufficientBalance');
+    });
+
+    it('allows withdrawal of free balance while locked funds are held', async () => {
+      await vault.connect(user).lockForBet(MARKET_ID, LOCK);
+      // Free = 0.6 FLOW — withdrawal should succeed
+      await expect(vault.connect(user).withdraw(ethers.parseEther('0.6'))).to.not.be.reverted;
+    });
+
+    it('pause blocks lockForBet', async () => {
+      await vault.connect(owner).pause();
+      await expect(
+        vault.connect(user).lockForBet(MARKET_ID, LOCK)
+      ).to.be.revertedWithCustomError(vault, 'EnforcedPause');
+    });
+  });
+
+  // ─── Payout claim with collateral ────────────────────────────────────────
+
+  describe('claimPayout with collateral lock', () => {
+    const MARKET_ID = ethers.keccak256(ethers.toUtf8Bytes('market-payout-lock'));
+    const DEPOSIT   = ethers.parseEther('1.0');
+    const STAKE     = ethers.parseEther('0.2');
+
+    async function signPayout(
+      who: typeof user,
+      marketId: string,
+      amount: bigint,
+      nonce: number,
+      expiry: number
+    ) {
+      const vaultAddress = await vault.getAddress();
+      const msgHash = ethers.keccak256(
+        ethers.AbiCoder.defaultAbiCoder().encode(
+          ['address', 'bytes32', 'uint256', 'uint256', 'uint256', 'address'],
+          [who.address, marketId, amount, nonce, expiry, vaultAddress]
+        )
+      );
+      return settlementSigner.signMessage(ethers.getBytes(msgHash));
+    }
+
+    beforeEach(async () => {
+      await vault.connect(user).deposit({ value: DEPOSIT });
+      await vault.connect(user).lockForBet(MARKET_ID, STAKE);
+    });
+
+    it('winner: releases lock and credits net payout (stake + winnings)', async () => {
+      const payout = ethers.parseEther('0.35'); // stake 0.2 + winnings 0.15
+      const nonce  = 1;
+      const expiry = (await ethers.provider.getBlock('latest'))!.timestamp + 3600;
+      const sig    = await signPayout(user, MARKET_ID, payout, nonce, expiry);
+
+      await expect(vault.connect(user).claimPayout(MARKET_ID, payout, nonce, expiry, sig))
+        .to.emit(vault, 'BetUnlocked').withArgs(user.address, MARKET_ID, STAKE)
+        .and.to.emit(vault, 'PayoutClaimed').withArgs(user.address, MARKET_ID, payout);
+
+      // Final balance: 1.0 - 0.2 (stake deducted) + 0.35 (payout credited) = 1.15
+      expect(await vault.getBalance(user.address)).to.equal(ethers.parseEther('1.15'));
+      expect(await vault.totalLocked(user.address)).to.equal(0n);
+      expect(await vault.lockedAmounts(user.address, MARKET_ID)).to.equal(0n);
+    });
+
+    it('loser: releases lock and deducts stake (payout = 0)', async () => {
+      const payout = 0n;
+      const nonce  = 1;
+      const expiry = (await ethers.provider.getBlock('latest'))!.timestamp + 3600;
+      const sig    = await signPayout(user, MARKET_ID, payout, nonce, expiry);
+
+      await expect(vault.connect(user).claimPayout(MARKET_ID, payout, nonce, expiry, sig))
+        .to.emit(vault, 'BetUnlocked').withArgs(user.address, MARKET_ID, STAKE)
+        .and.to.emit(vault, 'PayoutClaimed').withArgs(user.address, MARKET_ID, payout);
+
+      // Final balance: 1.0 - 0.2 (stake consumed) + 0 = 0.8
+      expect(await vault.getBalance(user.address)).to.equal(ethers.parseEther('0.8'));
+      expect(await vault.totalLocked(user.address)).to.equal(0n);
+    });
+
+    it('after settlement, lock is fully cleared and free balance is withdrawable', async () => {
+      const payout = ethers.parseEther('0.35');
+      const nonce  = 1;
+      const expiry = (await ethers.provider.getBlock('latest'))!.timestamp + 3600;
+      const sig    = await signPayout(user, MARKET_ID, payout, nonce, expiry);
+
+      // Fund the vault with winnings from a second depositor (simulates other bettors' stakes)
+      await vault.connect(relayer).deposit({ value: ethers.parseEther('0.5') });
+
+      await vault.connect(user).claimPayout(MARKET_ID, payout, nonce, expiry, sig);
+
+      // Lock is gone — totalLocked is 0, getFreeBalance == getBalance
+      expect(await vault.totalLocked(user.address)).to.equal(0n);
+      expect(await vault.getFreeBalance(user.address)).to.equal(await vault.getBalance(user.address));
+
+      // 1.0 deposited - 0.2 stake + 0.35 payout = 1.15 withdrawable
+      await expect(vault.connect(user).withdraw(ethers.parseEther('1.15'))).to.not.be.reverted;
+    });
+  });
 });

@@ -6,7 +6,8 @@
     "test": "test"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "sync-markets": "ts-node scripts/sync-markets-to-eamm.ts"
   },
   "keywords": [],
   "author": "",
@@ -20,6 +21,7 @@
     "hardhat": "^2.28.6"
   },
   "dependencies": {
+    "@filoz/synapse-sdk": "^0.39.0",
     "@openzeppelin/contracts": "^5.6.1",
     "@zama-fhe/relayer-sdk": "^0.4.1",
     "fhevmjs": "^0.6.2"

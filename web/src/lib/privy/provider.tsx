@@ -29,6 +29,32 @@ const flowEvmTestnet = {
   testnet: true,
 } as const;
 
+/**
+ * Ethereum Sepolia — needed for GhostEAMM (Zama fhevm) shielded bet flow.
+ * The embedded wallet must be able to switchChain(11155111) before signing
+ * the encrypted placeBet transaction.
+ */
+const ethereumSepolia = {
+  id: 11155111,
+  name: 'Ethereum Sepolia',
+  network: 'sepolia',
+  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+  rpcUrls: {
+    default: {
+      http: [
+        process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL ?? 'https://rpc.sepolia.org',
+      ],
+    },
+    public: {
+      http: ['https://rpc.sepolia.org'],
+    },
+  },
+  blockExplorers: {
+    default: { name: 'Etherscan', url: 'https://sepolia.etherscan.io' },
+  },
+  testnet: true,
+} as const;
+
 const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID ?? '';
 
 export function AppProviders({ children }: { children: ReactNode }) {
@@ -47,9 +73,11 @@ export function AppProviders({ children }: { children: ReactNode }) {
           requireUserPasswordOnCreate: false,
         },
 
-        // ── Flow EVM chain config ────────────────────────────────────────────
+        // ── Chain config ─────────────────────────────────────────────────────
+        // Flow EVM (545) is the primary user-facing chain (vault, deposits).
+        // Sepolia (11155111) is needed for GhostEAMM shielded bets via Zama.
         defaultChain: flowEvmTestnet,
-        supportedChains: [flowEvmTestnet],
+        supportedChains: [flowEvmTestnet, ethereumSepolia],
 
         // ── UI ───────────────────────────────────────────────────────────────
         appearance: {
