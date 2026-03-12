@@ -19,7 +19,12 @@ import {
   readEammMarketMeta, readEammPositionHandles, isEammDeployed,
   type EammMarketMeta, type PositionHandles,
 } from '@/lib/flow/eamm';
-import { readLockedAmount, claimVaultPayout, eammMarketIdToBytes32 } from '@/lib/flow/vault';
+import {
+  readLockedAmount,
+  claimVaultPayout,
+  eammMarketIdToBytes32,
+  readSettlementSigner,
+} from '@/lib/flow/vault';
 import { formatTimeRemaining, cn } from '@/lib/utils';
 import { requestSettlement, type SettlementClaim } from '@/lib/oracle-client';
 
@@ -522,6 +527,14 @@ export default function PortfolioPage() {
 
       // Ask oracle for the signed settlement message
       const claim = await requestSettlement(marketId.toString(), user.evmAddress);
+
+      const onChainSigner = await readSettlementSigner();
+      if (onChainSigner && onChainSigner.toLowerCase() !== claim.signerAddress.toLowerCase()) {
+        throw new Error(
+          `Settlement signer mismatch: vault trusts ${onChainSigner}, oracle signed with ${claim.signerAddress}. ` +
+          'Ask admin to update GhostVault.settlementSigner.',
+        );
+      }
 
       setPhase({ phase: 'submitting' });
 

@@ -43,7 +43,7 @@ import { submitAttestation, recordEvidence, updateReputation, getAgentInfo, getA
 import { postERC8004Reputation }                       from './erc8004-client';
 import {
   markMarketFinalized, getOrComputeSettlement, deliverSettlementOnChain,
-  getMarketSettlements,
+  getMarketSettlements, registerCanonicalBetTxHash, getCanonicalBetTxHash,
 } from './settlement';
 import type {
   ResolutionSession, OracleAgent, LogEntry, WsMessage, AgentStatus, SettlementClaimResponse,
@@ -335,6 +335,13 @@ async function finalizeResolution(session: ResolutionSession) {
 
   addLog(session, 'settlement relay ready — users can claim via /oracle/settle/:marketId');
 
+  // ── Background: resolve GhostEAMM on Sepolia so Lit Action can verify ─────────
+  // The Lit Action reads GhostEAMM.getMarketMeta() to confirm status === Resolved
+  // before signing the settlement claim.  We call resolveMarket() here using the
+  // deployer wallet (owner / resolver role).
+
+  void resolveGhostEammOnSepolia(session.marketId, outcome);
+
   // ── Background: record evidence CID in OracleAgentRegistry ───────────────────
   // Serialised by enqueueWrite (Calibration nonce ordering) but non-blocking.
   // Fires and forgets — each tx logs its own result when it confirms.
@@ -409,6 +416,55 @@ async function finalizeResolution(session: ResolutionSession) {
   ).then(() => {
     addLog(session, 'all reputation snapshots uploaded to Filecoin');
   });
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Call GhostEAMM.resolveMarket() on Sepolia after oracle quorum.
+ * This sets status = Resolved (1) so the Lit Action can verify it before signing.
+ * Runs in the background — does not block finalization.
+ */
+async function resolveGhostEammOnSepolia(marketId: string, outcome: boolean): Promise<void> {
+  const sepoliaRpc  = process.env.SEPOLIA_RPC_URL              ?? 'https://rpc.sepolia.org';
+  // Use EAMM_RESOLVER_PRIVATE_KEY (deployer/owner) — the oracle's SEPOLIA_PRIVATE_KEY
+  // may not have the onlyResolverOrOwner role on GhostEAMM.
+  const sepoliaKey  = process.env.EAMM_RESOLVER_PRIVATE_KEY
+                   ?? process.env.SEPOLIA_PRIVATE_KEY
+                   ?? '';
+  const eammAddress = process.env.GHOST_EAMM_ADDRESS            ?? '';
+
+  if (!sepoliaKey || !eammAddress) {
+    console.warn('[EAMM] Skipping resolveMarket — SEPOLIA_PRIVATE_KEY or GHOST_EAMM_ADDRESS not set');
+    return;
+  }
+
+  const EAMM_RESOLVE_ABI = [
+    'function resolveMarket(uint256 marketId, bool outcome) external',
+    'function getMarketMeta(uint256 marketId) external view returns (uint8 status, bool outcome, uint64 expiryAt)',
+  ];
+
+  try {
+    const provider = new ethers.JsonRpcProvider(sepoliaRpc);
+    const wallet   = new ethers.Wallet(sepoliaKey, provider);
+    const eamm     = new ethers.Contract(eammAddress, EAMM_RESOLVE_ABI, wallet);
+
+    // Check current status before sending tx (idempotent)
+    const [currentStatus] = await eamm.getMarketMeta(BigInt(marketId)) as [number, boolean, bigint];
+    if (Number(currentStatus) === 1) {
+      console.log(`[EAMM] Market ${marketId} already Resolved on Sepolia — skipping`);
+      return;
+    }
+
+    console.log(`[EAMM] Resolving market ${marketId} on Sepolia (outcome=${outcome})…`);
+    const tx = await eamm.resolveMarket(BigInt(marketId), outcome);
+    console.log(`[EAMM] resolveMarket TX: ${tx.hash}`);
+    const receipt = await tx.wait();
+    console.log(`[EAMM] Market ${marketId} Resolved on Sepolia — block ${receipt.blockNumber}`);
+    console.log(`[EAMM] Etherscan: https://sepolia.etherscan.io/tx/${tx.hash}`);
+  } catch (err) {
+    console.warn(`[EAMM] resolveMarket failed (non-fatal): ${(err as Error).message}`);
+  }
 }
 
 // ── Storacha read endpoints (Track 2 — cross-agent knowledge sharing) ─────────
@@ -592,6 +648,69 @@ app.post('/oracle/reputation/update', async (req, res) => {
 // ── Settlement endpoints (Phase 6) ────────────────────────────────────────────
 
 /**
+ * POST /oracle/bets/register
+ * Body: { marketId: string | number, userAddress: string, betTxHash: string }
+ *
+ * Registers the canonical BetPlaced tx hash for deterministic settlement later.
+ */
+app.post('/oracle/bets/register', async (req, res) => {
+  const body = req.body as { marketId?: string | number; userAddress?: string; betTxHash?: string };
+  const marketId = body.marketId !== undefined ? String(body.marketId) : '';
+  const userAddress = body.userAddress ?? '';
+  const betTxHash = body.betTxHash ?? '';
+
+  if (!/^\d+$/.test(marketId)) {
+    return res.status(400).json({ error: 'Invalid or missing marketId' });
+  }
+  if (!/^0x[0-9a-fA-F]{40}$/.test(userAddress)) {
+    return res.status(400).json({ error: 'Invalid or missing userAddress' });
+  }
+  if (!/^0x[0-9a-fA-F]{64}$/.test(betTxHash)) {
+    return res.status(400).json({ error: 'Invalid or missing betTxHash' });
+  }
+
+  try {
+    await registerCanonicalBetTxHash(marketId, userAddress, betTxHash);
+    return res.json({
+      ok: true,
+      marketId,
+      userAddress: userAddress.toLowerCase(),
+      betTxHash: betTxHash.toLowerCase(),
+      source: 'registered',
+    });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+/**
+ * GET /oracle/bets/:marketId/:userAddress
+ *
+ * Returns canonical bet tx hash for this user+market if previously registered.
+ */
+app.get('/oracle/bets/:marketId/:userAddress', async (req, res) => {
+  const { marketId, userAddress } = req.params;
+  if (!/^\d+$/.test(marketId)) {
+    return res.status(400).json({ error: 'Invalid marketId' });
+  }
+  if (!/^0x[0-9a-fA-F]{40}$/.test(userAddress)) {
+    return res.status(400).json({ error: 'Invalid userAddress' });
+  }
+
+  try {
+    const betTxHash = await getCanonicalBetTxHash(marketId, userAddress);
+    return res.json({
+      marketId,
+      userAddress: userAddress.toLowerCase(),
+      betTxHash,
+      source: betTxHash ? 'registered' : 'none',
+    });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+/**
  * POST /oracle/settle/:marketId
  * Body: { userAddress: string }
  *
@@ -604,7 +723,15 @@ app.post('/oracle/reputation/update', async (req, res) => {
  */
 app.post('/oracle/settle/:marketId', async (req, res) => {
   const marketId    = req.params.marketId;
-  const userAddress = (req.body as { userAddress?: string })?.userAddress;
+  const body        = req.body as { userAddress?: string; betTxHash?: string };
+  const userAddress = body?.userAddress;
+  // Optional: the tx hash where the user placed their bet.
+  // When provided, the oracle resolves its exact block number and passes it to
+  // the Lit Action so eth_getLogs uses a 1-block range (works on Alchemy free tier).
+  const betTxHash   = body?.betTxHash;
+  // #region agent log
+  fetch('http://127.0.0.1:7884/ingest/fbd2257e-f2ff-467e-b558-4abfac1502be',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37e9d3'},body:JSON.stringify({sessionId:'37e9d3',runId:'settle-request',hypothesisId:'H1',location:'index.ts:settle-entry',message:'Settlement request received',data:{marketId,userAddress:userAddress ?? null,hasBetTxHash:Boolean(betTxHash),betTxHashPrefix:betTxHash?.slice(0,18) ?? null},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
 
   if (!userAddress || !/^0x[0-9a-fA-F]{40}$/.test(userAddress)) {
     return res.status(400).json({ error: 'Invalid or missing userAddress' });
@@ -619,7 +746,10 @@ app.post('/oracle/settle/:marketId', async (req, res) => {
   }
 
   try {
-    const settlement = await getOrComputeSettlement(marketId, userAddress);
+    // #region agent log
+    fetch('http://127.0.0.1:7884/ingest/fbd2257e-f2ff-467e-b558-4abfac1502be',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37e9d3'},body:JSON.stringify({sessionId:'37e9d3',runId:'settle-request',hypothesisId:'H1-H2',location:'index.ts:before-getOrComputeSettlement',message:'Calling getOrComputeSettlement',data:{marketId,userAddress,hasBetTxHash:Boolean(betTxHash)},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    const settlement = await getOrComputeSettlement(marketId, userAddress, betTxHash);
 
     const marketIdUint    = parseInt(marketId, 10).toString();
     const marketIdBytes32 = '0x' + BigInt(marketIdUint).toString(16).padStart(64, '0');

@@ -1,22 +1,27 @@
 /**
  * update-settlement-signer.ts
  *
- * Updates GhostVault.settlementSigner to the deployer address so that
- * simulate-settlement.ts (and eventually the real Lit PKP) can call
- * claimPayout() with a valid signature.
+ * Updates GhostVault.settlementSigner on Flow EVM testnet.
  *
- * Run (standalone — does NOT use Hardhat, fhevm plugin not involved):
+ * Run:
  *   npx ts-node scripts/update-settlement-signer.ts
  *
- * In production: set LIT_PKP_ADDRESS in .env to the Lit PKP address.
+ * Env:
+ *   - GHOST_VAULT_ADDRESS        (required)
+ *   - FLOW_EVM_RPC or FLOW_RPC_URL (optional; defaults to Flow testnet RPC)
+ *   - DEPLOYER_PRIVATE_KEY       (owner key; required)
+ *   - LIT_PKP_ETH_ADDRESS / LIT_PKP_ADDRESS / SETTLEMENT_SIGNER_ADDRESS (target signer)
  */
 
 import { ethers } from 'ethers';
 import dotenv from 'dotenv';
 dotenv.config();
 
-const GHOST_VAULT_ADDRESS = '0xAf470490b2462DC7359605B8e5D731CbB7816B55';
-const FLOW_EVM_RPC        = 'https://testnet.evm.nodes.onflow.org';
+const GHOST_VAULT_ADDRESS = process.env.GHOST_VAULT_ADDRESS;
+const FLOW_EVM_RPC =
+  process.env.FLOW_EVM_RPC ??
+  process.env.FLOW_RPC_URL ??
+  'https://testnet.evm.nodes.onflow.org';
 
 const VAULT_ABI = [
   'function settlementSigner() external view returns (address)',
@@ -25,14 +30,24 @@ const VAULT_ABI = [
 ];
 
 async function main() {
+  if (!GHOST_VAULT_ADDRESS) {
+    throw new Error('Missing GHOST_VAULT_ADDRESS in env');
+  }
+  if (!process.env.DEPLOYER_PRIVATE_KEY) {
+    throw new Error('Missing DEPLOYER_PRIVATE_KEY in env');
+  }
+
   const flowProvider = new ethers.JsonRpcProvider(FLOW_EVM_RPC);
   const owner        = new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY!, flowProvider);
   const vault        = new ethers.Contract(GHOST_VAULT_ADDRESS, VAULT_ABI, owner);
 
   const current = await vault.settlementSigner();
-  // For testnet: settlement signer = deployer (same key signs from Sepolia).
-  // For production: set this to the Lit PKP address.
-  const next    = process.env.LIT_PKP_ADDRESS ?? owner.address;
+  // Priority: explicit signer envs, then owner address fallback.
+  const next =
+    process.env.LIT_PKP_ETH_ADDRESS ??
+    process.env.LIT_PKP_ADDRESS ??
+    process.env.SETTLEMENT_SIGNER_ADDRESS ??
+    owner.address;
 
   console.log('GhostVault:          ', GHOST_VAULT_ADDRESS);
   console.log('Owner:               ', owner.address);

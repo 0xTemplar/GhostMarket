@@ -11,6 +11,7 @@ import {
   Menu,
   Ghost,
   Shield,
+  Radar,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { AuthButton } from '@/components/auth-button';
@@ -20,6 +21,7 @@ const mainLinks = [
   { href: '/', label: 'Markets', icon: LayoutGrid },
   { href: '/portfolio', label: 'Portfolio', icon: Briefcase },
   { href: '/vault', label: 'Vault', icon: Wallet },
+  { href: '/oracle', label: 'Oracle Room', icon: Radar },
 ];
 
 const categories = [

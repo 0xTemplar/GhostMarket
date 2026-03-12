@@ -43,6 +43,21 @@ export const GHOST_VAULT_ADDRESS =
   '0x0000000000000000000000000000000000000000';
 
 export const GHOST_VAULT_ABI = [
+  // ─── Custom errors (for readable viem simulation reverts) ──────────────────
+  { name: 'InsufficientBalance', type: 'error', inputs: [
+    { name: 'have', type: 'uint256' },
+    { name: 'need', type: 'uint256' },
+  ] },
+  { name: 'TransferFailed', type: 'error', inputs: [] },
+  { name: 'InvalidSignature', type: 'error', inputs: [] },
+  { name: 'NonceAlreadyUsed', type: 'error', inputs: [] },
+  { name: 'PayoutExpired', type: 'error', inputs: [] },
+  { name: 'ZeroAmount', type: 'error', inputs: [] },
+  { name: 'ZeroAddress', type: 'error', inputs: [] },
+  { name: 'BetAlreadyLocked', type: 'error', inputs: [
+    { name: 'marketId', type: 'bytes32' },
+  ] },
+
   // ─── Write ──────────────────────────────────────────────────────────────────
   {
     name: 'deposit',
@@ -119,6 +134,13 @@ export const GHOST_VAULT_ABI = [
     stateMutability: 'view',
     inputs: [{ name: 'user', type: 'address' }],
     outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'settlementSigner',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
   },
   // ─── Events ─────────────────────────────────────────────────────────────────
   {
@@ -236,6 +258,22 @@ export async function readLockedAmount(
     return formatEther(raw as bigint);
   } catch {
     return '0';
+  }
+}
+
+/** Current trusted settlement signer address configured in GhostVault. */
+export async function readSettlementSigner(): Promise<`0x${string}` | null> {
+  if (GHOST_VAULT_ADDRESS === '0x0000000000000000000000000000000000000000') return null;
+  try {
+    const signer = await publicClient.readContract({
+      address: GHOST_VAULT_ADDRESS,
+      abi: GHOST_VAULT_ABI,
+      functionName: 'settlementSigner',
+      args: [],
+    });
+    return signer as `0x${string}`;
+  } catch {
+    return null;
   }
 }
 

@@ -7,6 +7,7 @@ import {
   ExternalLink, RefreshCw, Gavel,
 } from 'lucide-react';
 import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
+import { triggerOracleResolution } from '@/lib/oracle-client';
 import {
   readAllMarkets, GHOST_MARKET_ADDRESS, GHOST_MARKET_ABI,
   type OnChainMarket,
@@ -37,6 +38,12 @@ type TxState =
   | { phase: 'success'; hash: string; marketId?: number }
   | { phase: 'error'; message: string };
 
+type ResolveState =
+  | { phase: 'idle' }
+  | { phase: 'triggering' }
+  | { phase: 'started' }
+  | { phase: 'error'; message: string };
+
 // ─── Resolve form ─────────────────────────────────────────────────────────────
 
 function ResolvePanel({
@@ -46,37 +53,29 @@ function ResolvePanel({
   market: OnChainMarket;
   onDone: () => void;
 }) {
-  const walletClient = useFlowWalletClient();
   const [outcome, setOutcome]   = useState<'YES' | 'NO'>('YES');
-  const [txState, setTxState]   = useState<TxState>({ phase: 'idle' });
+  const [resolveState, setResolveState] = useState<ResolveState>({ phase: 'idle' });
 
   const handleResolve = async () => {
-    if (!walletClient || !GHOST_MARKET_ADDRESS) return;
-    setTxState({ phase: 'signing' });
+    setResolveState({ phase: 'triggering' });
     try {
-      const [account] = await walletClient.getAddresses();
-      const { request } = await publicClient.simulateContract({
-        address: GHOST_MARKET_ADDRESS,
-        abi: GHOST_MARKET_ABI,
-        functionName: 'resolveMarket',
-        args: [BigInt(market.id), outcome === 'YES'],
-        account,
-        chain: flowTestnet,
-      });
-      const hash = await walletClient.writeContract(request);
-      setTxState({ phase: 'pending', hash });
-      await publicClient.waitForTransactionReceipt({ hash });
-      setTxState({ phase: 'success', hash });
+      await triggerOracleResolution(market.id, outcome === 'YES');
+      setResolveState({ phase: 'started' });
       setTimeout(onDone, 2000);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message.slice(0, 160) : 'Failed.';
-      setTxState({ phase: 'error', message: msg });
+      setResolveState({ phase: 'error', message: msg });
     }
   };
 
   return (
     <div className="rounded-xl border border-white/10 bg-slate-800 p-4 space-y-3">
       <p className="text-xs font-medium text-slate-400 truncate">{market.title}</p>
+      {Date.now() / 1000 < market.expiryAt && (
+        <p className="text-[11px] text-amber-300">
+          Warning: market is not expired yet. Use only for manual override/testing.
+        </p>
+      )}
       <div className="flex gap-2">
         {(['YES', 'NO'] as const).map((o) => (
           <button
@@ -99,25 +98,25 @@ function ResolvePanel({
         ))}
       </div>
 
-      {txState.phase === 'success' ? (
+      {resolveState.phase === 'started' ? (
         <p className="text-xs text-emerald-400 flex items-center gap-1">
           <CheckCircle2 className="h-3.5 w-3.5" />
-          Resolved as {outcome}
+          Oracle resolution started ({outcome})
         </p>
-      ) : txState.phase === 'error' ? (
-        <p className="text-xs text-rose-400">{txState.message}</p>
+      ) : resolveState.phase === 'error' ? (
+        <p className="text-xs text-rose-400">{resolveState.message}</p>
       ) : (
         <button
           onClick={handleResolve}
-          disabled={txState.phase === 'signing' || txState.phase === 'pending'}
+          disabled={resolveState.phase === 'triggering'}
           className="w-full h-9 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-900 font-semibold text-sm flex items-center justify-center gap-2 transition-colors"
         >
-          {txState.phase === 'signing' || txState.phase === 'pending' ? (
+          {resolveState.phase === 'triggering' ? (
             <Loader2 className="h-4 w-4 animate-spin" />
           ) : (
             <Gavel className="h-4 w-4" />
           )}
-          Resolve {outcome}
+          Trigger Oracle Resolve ({outcome})
         </button>
       )}
     </div>
@@ -461,14 +460,12 @@ export default function AdminPage() {
                           {new Date(m.expiryAt * 1000).toLocaleDateString()}
                         </p>
                       </div>
-                      {expired && (
-                        <button
-                          onClick={() => setShowResolve(showResolve === m.id ? null : m.id)}
-                          className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 border border-amber-500/20 transition-colors"
-                        >
-                          {showResolve === m.id ? 'Cancel' : 'Resolve'}
-                        </button>
-                      )}
+                      <button
+                        onClick={() => setShowResolve(showResolve === m.id ? null : m.id)}
+                        className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 border border-amber-500/20 transition-colors"
+                      >
+                        {showResolve === m.id ? 'Cancel' : 'Resolve'}
+                      </button>
                     </div>
 
                     {showResolve === m.id && (

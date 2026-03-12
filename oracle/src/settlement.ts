@@ -21,12 +21,15 @@
 import { ethers }            from 'ethers';
 import type { ResolutionSession } from './types';
 import { signSettlement, freshNonceExpiry } from './lit-client';
+import Redis from 'ioredis';
 
 // ── Environment ───────────────────────────────────────────────────────────────
 
 const GHOST_VAULT_ADDRESS  = process.env.GHOST_VAULT_ADDRESS ?? '0xAf470490b2462DC7359605B8e5D731CbB7816B55';
 const FLOW_RPC_URL         = process.env.FLOW_RPC_URL ?? 'https://testnet.evm.nodes.onflow.org';
 const SETTLEMENT_SIGNER_KEY = process.env.SETTLEMENT_SIGNER_PRIVATE_KEY ?? '';
+const ORACLE_REDIS_URL      = process.env.ORACLE_REDIS_URL ?? process.env.REDIS_URL ?? '';
+const VAULT_SIGNER_ABI       = ['function settlementSigner() view returns (address)'];
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -47,6 +50,26 @@ export interface PendingSettlement {
 
 // settlements[marketId][userAddress] → PendingSettlement
 const settlements = new Map<string, Map<string, PendingSettlement>>();
+// In-memory fallback store when Redis is not configured.
+// canonicalBetTxHashes[marketId][userAddress] -> betTxHash
+const canonicalBetTxHashes = new Map<string, Map<string, string>>();
+let redisClient: Redis | null = null;
+
+function canonicalTxHashKey(marketId: string, userAddress: string): string {
+  return `ghost:oracle:betTxHash:${marketId}:${userAddress.toLowerCase()}`;
+}
+
+function getRedisClient(): Redis | null {
+  if (!ORACLE_REDIS_URL) return null;
+  if (!redisClient) {
+    redisClient = new Redis(ORACLE_REDIS_URL, {
+      lazyConnect: true,
+      maxRetriesPerRequest: 1,
+      enableReadyCheck: false,
+    });
+  }
+  return redisClient;
+}
 
 // finalized markets: marketId → { outcome, finalizedAt }
 const finalizedMarkets = new Map<string, { outcome: boolean; finalizedAt: number }>();
@@ -62,6 +85,54 @@ export function markMarketFinalized(marketId: string, outcome: boolean): void {
   if (!settlements.has(marketId)) {
     settlements.set(marketId, new Map());
   }
+}
+
+/**
+ * Register the canonical BetPlaced transaction hash for a user+market.
+ * Call this at bet-placement time from the app/backend for deterministic settling.
+ */
+export async function registerCanonicalBetTxHash(
+  marketId: string,
+  userAddress: string,
+  betTxHash: string,
+): Promise<void> {
+  const user = userAddress.toLowerCase();
+  const tx   = betTxHash.toLowerCase();
+
+  const redis = getRedisClient();
+  if (redis) {
+    try {
+      if (redis.status === 'wait') await redis.connect();
+      await redis.set(canonicalTxHashKey(marketId, user), tx);
+      return;
+    } catch (err) {
+      console.warn('[Settlement] Redis write failed, using in-memory fallback:', (err as Error).message);
+    }
+  }
+
+  if (!canonicalBetTxHashes.has(marketId)) canonicalBetTxHashes.set(marketId, new Map());
+  canonicalBetTxHashes.get(marketId)!.set(user, tx);
+}
+
+/**
+ * Return previously registered canonical bet tx hash for a user+market.
+ */
+export async function getCanonicalBetTxHash(
+  marketId: string,
+  userAddress: string,
+): Promise<string | null> {
+  const user  = userAddress.toLowerCase();
+  const redis = getRedisClient();
+  if (redis) {
+    try {
+      if (redis.status === 'wait') await redis.connect();
+      const tx = await redis.get(canonicalTxHashKey(marketId, user));
+      if (tx) return tx;
+    } catch (err) {
+      console.warn('[Settlement] Redis read failed, using in-memory fallback:', (err as Error).message);
+    }
+  }
+  return canonicalBetTxHashes.get(marketId)?.get(user) ?? null;
 }
 
 /**
@@ -83,7 +154,11 @@ export function isMarketFinalized(marketId: string): boolean {
 export async function getOrComputeSettlement(
   marketId:    string,
   userAddress: string,
+  betTxHash?:  string,  // optional: tx hash of BetPlaced — lets oracle resolve exact block for Alchemy
 ): Promise<PendingSettlement> {
+  // #region agent log
+  fetch('http://127.0.0.1:7884/ingest/fbd2257e-f2ff-467e-b558-4abfac1502be',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37e9d3'},body:JSON.stringify({sessionId:'37e9d3',runId:'settle-compute',hypothesisId:'H2',location:'settlement.ts:getOrComputeSettlement-entry',message:'Entered settlement compute',data:{marketId,userAddress:userAddress.toLowerCase(),hasBetTxHash:Boolean(betTxHash),betTxHashPrefix:betTxHash?.slice(0,18) ?? null,isMarketFinalized:isMarketFinalized(marketId)},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
   if (!isMarketFinalized(marketId)) {
     throw new Error(`Market ${marketId} is not finalized yet`);
   }
@@ -91,7 +166,26 @@ export async function getOrComputeSettlement(
   // Return cached settlement if available
   const existing = settlements.get(marketId)?.get(userAddress.toLowerCase());
   if (existing) {
-    return existing;
+    try {
+      const provider = new ethers.JsonRpcProvider(FLOW_RPC_URL);
+      const vault = new ethers.Contract(GHOST_VAULT_ADDRESS, VAULT_SIGNER_ABI, provider);
+      const onChainSigner = String(await vault.settlementSigner()).toLowerCase();
+      if (existing.signerAddress.toLowerCase() !== onChainSigner) {
+        // Drop stale cache entry when signer has rotated.
+        settlements.get(marketId)?.delete(userAddress.toLowerCase());
+      } else {
+        // #region agent log
+        fetch('http://127.0.0.1:7884/ingest/fbd2257e-f2ff-467e-b558-4abfac1502be',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37e9d3'},body:JSON.stringify({sessionId:'37e9d3',runId:'settle-compute',hypothesisId:'H2',location:'settlement.ts:getOrComputeSettlement-cache-hit',message:'Returning cached settlement',data:{marketId,userAddress:userAddress.toLowerCase(),signingPath:existing.signingPath,payout:existing.payout},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
+        return existing;
+      }
+    } catch {
+      // If signer read fails, keep previous behavior and return cache.
+      // #region agent log
+      fetch('http://127.0.0.1:7884/ingest/fbd2257e-f2ff-467e-b558-4abfac1502be',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37e9d3'},body:JSON.stringify({sessionId:'37e9d3',runId:'settle-compute',hypothesisId:'H2',location:'settlement.ts:getOrComputeSettlement-cache-hit',message:'Returning cached settlement',data:{marketId,userAddress:userAddress.toLowerCase(),signingPath:existing.signingPath,payout:existing.payout},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      return existing;
+    }
   }
 
   // Derive bytes32 market ID: abi.encode(uint256) zero-padded
@@ -100,12 +194,18 @@ export async function getOrComputeSettlement(
 
   const { nonce, expiry } = freshNonceExpiry();
 
+  // Priority:
+  // 1) betTxHash from request body
+  // 2) previously registered canonical bet tx hash
+  const resolvedBetTxHash = betTxHash ?? await getCanonicalBetTxHash(marketId, userAddress) ?? undefined;
+
   const result = await signSettlement({
     userAddress,
     marketIdUint,
     marketIdBytes32,
     nonce,
     expiry,
+    betTxHash: resolvedBetTxHash,
   });
 
   const settlement: PendingSettlement = {
