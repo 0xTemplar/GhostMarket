@@ -47,8 +47,7 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
     uint256 public agentCount;
     uint256 public constant INITIAL_REPUTATION = 80;
     uint256 public constant SLASH_PERCENT       = 10;
-    uint256 public constant QUORUM_THRESHOLD    = 5;   // 5-of-7
-    uint256 public constant MIN_AGENTS          = 7;
+    uint256 public quorumThreshold;   // set in constructor — e.g. 3-of-4 for demo, 5-of-7 for prod
 
     // ── Events ─────────────────────────────────────────────────────────────
 
@@ -69,7 +68,10 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
 
     // ── Constructor ────────────────────────────────────────────────────────
 
-    constructor() Ownable(msg.sender) {}
+    constructor(uint256 _quorumThreshold) Ownable(msg.sender) {
+        require(_quorumThreshold > 0, "Threshold must be > 0");
+        quorumThreshold = _quorumThreshold;
+    }
 
     // ── Agent Lifecycle ────────────────────────────────────────────────────
 
@@ -263,7 +265,7 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
             attesters.length,
             yes,
             no,
-            (yes >= QUORUM_THRESHOLD || no >= QUORUM_THRESHOLD),
+            (yes >= quorumThreshold || no >= quorumThreshold),
             marketFinalized[marketId],
             marketOutcome[marketId]
         );
@@ -289,10 +291,10 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
         bool outcome;
         bool reached;
 
-        if (yes >= QUORUM_THRESHOLD) {
+        if (yes >= quorumThreshold) {
             outcome = true;
             reached = true;
-        } else if (no >= QUORUM_THRESHOLD) {
+        } else if (no >= quorumThreshold) {
             outcome = false;
             reached = true;
         }

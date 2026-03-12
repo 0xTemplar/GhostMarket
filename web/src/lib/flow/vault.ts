@@ -271,6 +271,53 @@ export async function lockBetCollateral(
 }
 
 /**
+ * Submit a signed settlement claim to GhostVault on Flow EVM.
+ *
+ * Submits the signature returned by the oracle service to GhostVault.claimPayout().
+ * The vault verifies the EIP-191 signature, releases the collateral lock, and
+ * credits the net payout to the user's balance.
+ *
+ * @param walletClient   viem WalletClient on Flow EVM (from Privy embedded wallet).
+ * @param marketId       GhostEAMM uint256 market ID (or the bytes32 form — detected automatically).
+ * @param payout         Net payout in wei as decimal string.
+ * @param nonce          Replay-protection nonce from the oracle.
+ * @param expiry         Signature expiry as unix seconds decimal string.
+ * @param sig            65-byte ECDSA signature hex from the oracle.
+ * @returns              Transaction hash of the claimPayout call on Flow EVM.
+ */
+export async function claimVaultPayout(
+  walletClient: WalletClient,
+  marketId:     number | `0x${string}`,
+  payout:       string,
+  nonce:        string,
+  expiry:       string,
+  sig:          string,
+): Promise<`0x${string}`> {
+  const [account] = await walletClient.getAddresses();
+
+  const marketIdBytes32: `0x${string}` =
+    typeof marketId === 'number'
+      ? eammMarketIdToBytes32(marketId)
+      : marketId;
+
+  const { request } = await publicClient.simulateContract({
+    address:      GHOST_VAULT_ADDRESS,
+    abi:          GHOST_VAULT_ABI,
+    functionName: 'claimPayout',
+    args:         [
+      marketIdBytes32,
+      BigInt(payout),
+      BigInt(nonce),
+      BigInt(expiry),
+      sig as `0x${string}`,
+    ],
+    account,
+  });
+
+  return walletClient.writeContract(request);
+}
+
+/**
  * Build a viem WalletClient targeting Flow EVM from a Privy EIP-1193 provider.
  */
 export function buildFlowWalletClient(provider: unknown): WalletClient {

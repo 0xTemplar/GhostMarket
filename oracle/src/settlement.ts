@@ -1,0 +1,215 @@
+/**
+ * settlement.ts — Post-quorum settlement delivery for GhostMarket.
+ *
+ * After oracle quorum finalises a market, this module:
+ *   1. Stores a pending settlement record for the market.
+ *   2. Provides `getOrComputeSettlement()` — called when a user requests their
+ *      signed payout claim (via the REST endpoint POST /oracle/settle/:marketId).
+ *   3. Delivers the settlement to Flow EVM by calling GhostVault.claimPayout()
+ *      on behalf of the user when `deliverSettlementOnChain()` is called.
+ *
+ * Design:
+ *   - Settlements are computed on-demand per user (lazy) so the oracle
+ *     service doesn't need to know which users placed bets at resolution time.
+ *   - Signed settlement messages are cached in memory so repeated requests
+ *     from the same user return the same nonce/sig.
+ *   - The oracle can optionally deliver the payout autonomously after quorum
+ *     (using the deployer key as relayer) but the default path is the user
+ *     submitting the signed claim themselves.
+ */
+
+import { ethers }            from 'ethers';
+import type { ResolutionSession } from './types';
+import { signSettlement, freshNonceExpiry } from './lit-client';
+
+// ── Environment ───────────────────────────────────────────────────────────────
+
+const GHOST_VAULT_ADDRESS  = process.env.GHOST_VAULT_ADDRESS ?? '0xAf470490b2462DC7359605B8e5D731CbB7816B55';
+const FLOW_RPC_URL         = process.env.FLOW_RPC_URL ?? 'https://testnet.evm.nodes.onflow.org';
+const SETTLEMENT_SIGNER_KEY = process.env.SETTLEMENT_SIGNER_PRIVATE_KEY ?? '';
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface PendingSettlement {
+  marketId:       string;
+  userAddress:    string;
+  sig:            string;
+  payout:         string;   // wei as decimal string
+  nonce:          string;
+  expiry:         string;
+  signerAddress:  string;
+  signingPath:    'lit' | 'deployer';
+  computedAt:     number;   // unix ms
+  deliveredTx:    string | null;   // Flow EVM tx hash if oracle delivered on-chain
+}
+
+// ── In-memory settlement cache ────────────────────────────────────────────────
+
+// settlements[marketId][userAddress] → PendingSettlement
+const settlements = new Map<string, Map<string, PendingSettlement>>();
+
+// finalized markets: marketId → { outcome, finalizedAt }
+const finalizedMarkets = new Map<string, { outcome: boolean; finalizedAt: number }>();
+
+// ── Public API ─────────────────────────────────────────────────────────────────
+
+/**
+ * Mark a market as finalized after quorum.
+ * Called by the oracle resolution engine.
+ */
+export function markMarketFinalized(marketId: string, outcome: boolean): void {
+  finalizedMarkets.set(marketId, { outcome, finalizedAt: Date.now() });
+  if (!settlements.has(marketId)) {
+    settlements.set(marketId, new Map());
+  }
+}
+
+/**
+ * Check if a market has been finalized.
+ */
+export function isMarketFinalized(marketId: string): boolean {
+  return finalizedMarkets.has(marketId);
+}
+
+/**
+ * Get a signed settlement for a user.
+ *
+ * - Returns a cached settlement if one already exists for this user+market.
+ * - Otherwise, computes on-chain data via lit-client.ts and generates a fresh
+ *   signed settlement message.
+ *
+ * Throws if the market is not finalized or if on-chain reads fail.
+ */
+export async function getOrComputeSettlement(
+  marketId:    string,
+  userAddress: string,
+): Promise<PendingSettlement> {
+  if (!isMarketFinalized(marketId)) {
+    throw new Error(`Market ${marketId} is not finalized yet`);
+  }
+
+  // Return cached settlement if available
+  const existing = settlements.get(marketId)?.get(userAddress.toLowerCase());
+  if (existing) {
+    return existing;
+  }
+
+  // Derive bytes32 market ID: abi.encode(uint256) zero-padded
+  const marketIdUint = parseInt(marketId, 10).toString();
+  const marketIdBytes32 = ethers.zeroPadValue(ethers.toBeHex(BigInt(marketIdUint)), 32);
+
+  const { nonce, expiry } = freshNonceExpiry();
+
+  const result = await signSettlement({
+    userAddress,
+    marketIdUint,
+    marketIdBytes32,
+    nonce,
+    expiry,
+  });
+
+  const settlement: PendingSettlement = {
+    marketId,
+    userAddress:   userAddress.toLowerCase(),
+    sig:           result.sig,
+    payout:        result.payout,
+    nonce:         result.nonce,
+    expiry:        result.expiry,
+    signerAddress: result.signerAddress,
+    signingPath:   result.path,
+    computedAt:    Date.now(),
+    deliveredTx:   null,
+  };
+
+  if (!settlements.has(marketId)) settlements.set(marketId, new Map());
+  settlements.get(marketId)!.set(userAddress.toLowerCase(), settlement);
+
+  return settlement;
+}
+
+/**
+ * Retrieve a cached settlement without re-computing.
+ * Returns null if no settlement exists for this user+market.
+ */
+export function getCachedSettlement(marketId: string, userAddress: string): PendingSettlement | null {
+  return settlements.get(marketId)?.get(userAddress.toLowerCase()) ?? null;
+}
+
+/**
+ * Deliver the settlement on-chain by calling GhostVault.claimPayout()
+ * on behalf of the user (oracle acts as relayer, pays gas on Flow EVM).
+ *
+ * Only works when SETTLEMENT_SIGNER_PRIVATE_KEY is set (oracle controls a
+ * funded wallet on Flow EVM).  Useful for automated post-resolution delivery.
+ *
+ * Returns the Flow EVM transaction hash on success, or null if delivery
+ * is not configured / was already delivered.
+ */
+export async function deliverSettlementOnChain(
+  settlement: PendingSettlement,
+): Promise<string | null> {
+  if (!SETTLEMENT_SIGNER_KEY) {
+    console.log('[Settlement] Autonomous delivery skipped (no SETTLEMENT_SIGNER_PRIVATE_KEY)');
+    return null;
+  }
+
+  if (settlement.deliveredTx) {
+    console.log('[Settlement] Already delivered:', settlement.deliveredTx);
+    return settlement.deliveredTx;
+  }
+
+  if (settlement.payout === '0') {
+    // Loser — nothing to deliver. Claim still needs to happen to release the lock.
+    // Let the user trigger it themselves with a 0-payout message.
+    return null;
+  }
+
+  const VAULT_ABI = [
+    'function claimPayout(bytes32 marketId, uint256 amount, uint256 nonce, uint256 expiry, bytes calldata sig) external',
+    'event PayoutClaimed(address indexed user, bytes32 indexed marketId, uint256 amount)',
+  ];
+
+  try {
+    const provider  = new ethers.JsonRpcProvider(FLOW_RPC_URL);
+    const relayer   = new ethers.Wallet(SETTLEMENT_SIGNER_KEY, provider);
+    const vault     = new ethers.Contract(GHOST_VAULT_ADDRESS, VAULT_ABI, relayer);
+
+    const marketIdUint    = parseInt(settlement.marketId, 10).toString();
+    const marketIdBytes32 = ethers.zeroPadValue(ethers.toBeHex(BigInt(marketIdUint)), 32);
+
+    console.log(`[Settlement] Delivering settlement on Flow EVM for ${settlement.userAddress}…`);
+
+    const tx = await vault.claimPayout(
+      marketIdBytes32,
+      BigInt(settlement.payout),
+      BigInt(settlement.nonce),
+      BigInt(settlement.expiry),
+      settlement.sig,
+    );
+
+    console.log(`[Settlement] TX submitted: ${tx.hash}`);
+    const receipt = await tx.wait();
+    console.log(`[Settlement] Confirmed in block ${receipt.blockNumber}`);
+    console.log(`[Settlement] Flowscan: https://evm-testnet.flowscan.io/tx/${tx.hash}`);
+
+    settlement.deliveredTx = tx.hash as string;
+
+    // Update cached entry
+    settlements.get(settlement.marketId)?.set(settlement.userAddress.toLowerCase(), settlement);
+
+    return tx.hash as string;
+  } catch (err) {
+    console.error('[Settlement] On-chain delivery failed:', (err as Error).message);
+    return null;
+  }
+}
+
+/**
+ * Return a summary of all settlements for a given market.
+ * Useful for the Oracle Room panel.
+ */
+export function getMarketSettlements(marketId: string): PendingSettlement[] {
+  const marketSettlements = settlements.get(marketId);
+  if (!marketSettlements) return [];
+  return Array.from(marketSettlements.values());
+}

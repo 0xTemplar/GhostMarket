@@ -73,11 +73,17 @@ async function main() {
     );
   }
 
+  // quorumThreshold: must match ACTIVE_ORACLE_AGENTS in oracle/.env
+  // floor(n/2)+1 → 4 agents = 3, 7 agents = 4
+  const activeAgents    = Number(process.env.ACTIVE_ORACLE_AGENTS ?? 4);
+  const quorumThreshold = Math.floor(activeAgents / 2) + 1;
+  console.log(`Active agents: ${activeAgents}  →  quorum threshold: ${quorumThreshold}-of-${activeAgents}`);
+
   const artifact = loadArtifact();
   const factory  = new ethers.ContractFactory(artifact.abi, artifact.bytecode, wallet);
 
   console.log('\nDeploying OracleAgentRegistry...');
-  const contract = await factory.deploy();
+  const contract = await factory.deploy(quorumThreshold);
   await contract.waitForDeployment();
 
   const address = await contract.getAddress();
@@ -113,6 +119,21 @@ async function main() {
     }
     fs.writeFileSync(webEnvPath, webEnv);
     console.log('✓ NEXT_PUBLIC_ORACLE_REGISTRY_ADDRESS written to web/.env.local');
+  }
+
+  // ── Also write to oracle/.env ────────────────────────────────────────────
+
+  const oracleEnvPath = path.join(__dirname, '../../oracle/.env');
+  if (fs.existsSync(oracleEnvPath)) {
+    let oracleEnv = fs.readFileSync(oracleEnvPath, 'utf-8');
+    const oracleVar = `ORACLE_REGISTRY_ADDRESS=${address}`;
+    if (oracleEnv.includes('ORACLE_REGISTRY_ADDRESS=')) {
+      oracleEnv = oracleEnv.replace(/ORACLE_REGISTRY_ADDRESS=.*/, oracleVar);
+    } else {
+      oracleEnv += `\n${oracleVar}\n`;
+    }
+    fs.writeFileSync(oracleEnvPath, oracleEnv);
+    console.log('✓ ORACLE_REGISTRY_ADDRESS written to oracle/.env');
   }
 
   console.log('\n=== Next Steps ===');

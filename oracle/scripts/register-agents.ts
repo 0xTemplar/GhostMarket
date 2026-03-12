@@ -34,7 +34,40 @@ async function main() {
   const baseKey = process.env.CALIBRATION_PRIVATE_KEY;
   if (!baseKey) throw new Error('CALIBRATION_PRIVATE_KEY not set');
 
-  console.log('\n=== GhostMarket Oracle Agent Registration ===\n');
+  // Optional: --only <id1,id2,...> to register a subset of agents
+  const onlyFlagIdx = process.argv.indexOf('--only');
+  const onlyArg = process.argv.find(a => a.startsWith('--only='))?.split('=')[1]
+    ?? (onlyFlagIdx !== -1 ? process.argv[onlyFlagIdx + 1] : undefined);
+  const onlyIds = onlyArg
+    ? new Set(onlyArg.split(',').map(v => Number(v.trim())))
+    : null;
+
+  // Default: register only the agents the oracle actually uses (ACTIVE_ORACLE_AGENTS).
+  // Pass --all to register all 7 (e.g. when scaling up to a full 7-agent swarm).
+  const registerAll = process.argv.includes('--all');
+  const activeCount = Number(process.env.ACTIVE_ORACLE_AGENTS ?? 4);
+
+  const definitions = onlyIds
+    ? AGENT_DEFINITIONS.filter(d => onlyIds.has(d.id))
+    : registerAll
+    ? AGENT_DEFINITIONS
+    : AGENT_DEFINITIONS.slice(0, activeCount);
+
+  const scopeLabel = onlyIds
+    ? `agents: ${[...onlyIds].join(', ')}`
+    : registerAll
+    ? 'all 7 agents'
+    : `agents 1–${activeCount} (ACTIVE_ORACLE_AGENTS=${activeCount}; pass --all for all 7)`;
+
+  console.log(`\n=== GhostMarket Oracle Agent Registration (${scopeLabel}) ===\n`);
+
+  // Load existing registrations so we can merge results
+  const outPath = path.join(__dirname, '../registered-agents.json');
+  let existing: Record<number, (typeof registered)[number]> = {};
+  try {
+    const raw = fs.readFileSync(outPath, 'utf8');
+    for (const entry of JSON.parse(raw)) existing[entry.id] = entry;
+  } catch { /* first run */ }
 
   const registered: Array<{
     id: number;
@@ -45,7 +78,7 @@ async function main() {
     calibrationTx: string;
   }> = [];
 
-  for (const def of AGENT_DEFINITIONS) {
+  for (const def of definitions) {
     const agentId  = def.id;
     const name     = def.name;
     const source   = def.source;
@@ -131,15 +164,16 @@ async function main() {
     console.log(`  ✓ calibration  : ${calibrationTx || '(skipped)'}`);
   }
 
-  // Save registration results
-  const outPath = path.join(__dirname, '../registered-agents.json');
-  fs.writeFileSync(outPath, JSON.stringify(registered, null, 2));
+  // Merge new results into existing registrations and save
+  for (const entry of registered) existing[entry.id] = entry;
+  const merged = AGENT_DEFINITIONS.map(d => existing[d.id]).filter(Boolean);
+  fs.writeFileSync(outPath, JSON.stringify(merged, null, 2));
   console.log(`\n✓ Registration complete. Results saved to oracle/registered-agents.json`);
-  console.log('\n=== Summary ===');
+  console.log('\n=== Summary (this run) ===');
   console.table(registered.map(a => ({
     id: a.id,
     name: a.name,
-    metadataCid: a.metadataCid.slice(0, 20) + '...',
+    calibrationTx: a.calibrationTx ? a.calibrationTx.slice(0, 18) + '...' : '(skipped)',
     erc8004Id: a.erc8004Id,
   })));
 }

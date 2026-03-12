@@ -62,10 +62,28 @@ export type WsMessageType =
   | 'log'
   | 'quorum_reached'
   | 'finalized'
+  | 'settlement_delivered'
   | 'error';
 
 export interface WsMessage {
   type: WsMessageType;
   marketId: string;
   payload: unknown;
+}
+
+// ── Settlement ─────────────────────────────────────────────────────────────────
+
+/** Response from POST /oracle/settle/:marketId */
+export interface SettlementClaimResponse {
+  marketId:      string;
+  userAddress:   string;
+  sig:           string;    // 65-byte ECDSA signature hex
+  payout:        string;    // net payout in wei (decimal string)
+  nonce:         string;    // replay-protection nonce
+  expiry:        string;    // unix seconds
+  marketIdBytes32: string;  // 0x-padded bytes32 for claimPayout()
+  vaultAddress:  string;
+  signerAddress: string;
+  signingPath:   'lit' | 'deployer';
+  deliveredTx:   string | null;   // Flow EVM tx if oracle auto-delivered
 }
