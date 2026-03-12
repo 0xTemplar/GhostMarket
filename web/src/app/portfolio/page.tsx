@@ -401,6 +401,8 @@ export default function PortfolioPage() {
             user.evmAddress as `0x${string}`,
           );
           if (!pos || (pos.yesAmount === 0n && pos.noAmount === 0n)) return;
+          // Closed position: resolved + already claimed.
+          if (market.status === 1 && pos.claimed) return;
 
           const yesFlow = Number(pos.yesAmount) / 1e18;
           const noFlow  = Number(pos.noAmount)  / 1e18;
@@ -454,6 +456,8 @@ export default function PortfolioPage() {
               readEammMarketMeta(market.id),
               readLockedAmount(user.evmAddress as `0x${string}`, market.id),
             ]);
+            // Closed shielded position: market resolved and collateral lock released.
+            if (meta.status === 1 && Number(lockedCollateral) === 0) return;
             results.push({
               marketId:         market.id,
               marketTitle:      market.title,
@@ -551,11 +555,13 @@ export default function PortfolioPage() {
       const payoutFlow = (Number(BigInt(claim.payout)) / 1e18).toFixed(4);
 
       setPhase({ phase: 'success', txHash, payout: payoutFlow });
+      // Refresh lists so claimed/closed positions disappear from the open view.
+      await Promise.all([fetchShieldedPositions(), fetchOnChainPositions()]);
     } catch (err) {
       const message = (err as Error).message ?? 'Claim failed';
       setPhase({ phase: 'error', error: message });
     }
-  }, [user.evmAddress, walletClient]);
+  }, [user.evmAddress, walletClient, fetchShieldedPositions, fetchOnChainPositions]);
 
   useEffect(() => {
     fetchOnChainPositions();

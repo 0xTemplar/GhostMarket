@@ -310,7 +310,6 @@ function HashRow({
 
 export function OracleRoom() {
   const [marketId, setMarketId] = useState('6');
-  const [selectedOutcome, setSelectedOutcome] = useState<'YES' | 'NO'>('YES');
   const [session, setSession] = useState<OracleSession | null>(null);
   const [loadingSession, setLoadingSession] = useState(false);
   const [resolving, setResolving] = useState(false);
@@ -376,7 +375,8 @@ export function OracleRoom() {
     setResolving(true);
     setError(null);
     try {
-      await triggerOracleResolution(marketId, selectedOutcome === 'YES');
+      // Outcome is determined by agent votes/quorum; the trigger only starts the run.
+      await triggerOracleResolution(marketId, true);
       connectWs(marketId);
       const latest = await getOracleSession(marketId);
       if (latest) setSession(latest);
@@ -385,7 +385,7 @@ export function OracleRoom() {
     } finally {
       setResolving(false);
     }
-  }, [marketId, selectedOutcome, connectWs]);
+  }, [marketId, connectWs]);
 
   useEffect(() => () => { if (wsRef.current) wsRef.current.close(); }, []);
 
@@ -504,17 +504,6 @@ export function OracleRoom() {
               className="h-9 w-28 rounded-lg border border-white/8 bg-slate-900 px-3 font-mono text-sm text-white placeholder:text-slate-700 focus:border-violet-500/50 focus:outline-none"
             />
           </div>
-          <div className="flex flex-col gap-1">
-            <label className="font-mono text-[9px] tracking-widest text-slate-600 uppercase">Outcome</label>
-            <select
-              value={selectedOutcome}
-              onChange={(e) => setSelectedOutcome(e.target.value as 'YES' | 'NO')}
-              className="h-9 rounded-lg border border-white/8 bg-slate-900 px-3 font-mono text-sm text-white focus:border-violet-500/50 focus:outline-none"
-            >
-              <option value="YES">YES</option>
-              <option value="NO">NO</option>
-            </select>
-          </div>
           <button
             onClick={loadSession}
             disabled={loadingSession}
@@ -525,19 +514,17 @@ export function OracleRoom() {
           <button
             onClick={startResolve}
             disabled={resolving}
-            className={cn(
-              'h-9 rounded-lg px-5 text-sm font-semibold transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-40',
-              selectedOutcome === 'YES'
-                ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400 shadow-emerald-500/20 shadow-md'
-                : 'bg-rose-500 text-white hover:bg-rose-400 shadow-rose-500/20 shadow-md',
-            )}
+            className="h-9 rounded-lg bg-violet-500 px-5 text-sm font-semibold text-white transition-all duration-200 hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {resolving ? (
               <span className="flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" />Starting…</span>
             ) : (
-              <span className="flex items-center gap-1.5"><Zap className="h-3.5 w-3.5" />Trigger Resolve · {selectedOutcome}</span>
+              <span className="flex items-center gap-1.5"><Zap className="h-3.5 w-3.5" />Trigger Agent Resolve</span>
             )}
           </button>
+          <p className="text-[10px] text-slate-500 font-mono">
+            Outcome is determined by agent quorum.
+          </p>
         </div>
 
         {error && (
