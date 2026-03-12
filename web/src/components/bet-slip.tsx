@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import { useWallets } from '@privy-io/react-auth';
 import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
 import { placeBet } from '@/lib/flow/market';
+import { registerCanonicalBetTxHash } from '@/lib/oracle-client';
 import {
   encryptBetInput,
   placeEncryptedBet,
@@ -110,10 +111,30 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
       }
       // If already locked: skip the tx and proceed to the Sepolia step.
     } catch (err: unknown) {
-      const message =
-        err instanceof Error
-          ? (err.message.includes('User rejected') ? 'Lock cancelled.' : err.message.slice(0, 160))
-          : 'Collateral lock failed.';
+      let message = 'Collateral lock failed.';
+      if (err instanceof Error) {
+        const raw = err.message;
+        const lower = raw.toLowerCase();
+        if (raw.includes('User rejected')) {
+          message = 'Lock cancelled.';
+        } else if (
+          raw.includes('InsufficientBalance') ||
+          raw.includes('0xcf479181')
+        ) {
+          message = 'Insufficient free vault balance to lock this bet amount. Deposit more FLOW in Vault or lower the stake.';
+        } else if (
+          raw.includes('BetAlreadyLocked') ||
+          raw.includes('0xac396183')
+        ) {
+          // Race-safe fallback: if lock was already created in a prior attempt,
+          // continue to encrypted Sepolia bet flow on next submit.
+          message = 'Collateral is already locked for this market. You can submit the shielded bet now.';
+        } else if (lower.includes('zeroamount') || raw.includes('0x1f2a2005')) {
+          message = 'Bet amount must be greater than zero.';
+        } else {
+          message = raw.slice(0, 160);
+        }
+      }
       setTxState({ phase: 'error', message });
       return;
     }
@@ -146,6 +167,11 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
       // Poll for confirmation on Sepolia.
       const { zamaPublicClient } = await import('@/lib/flow/eamm');
       await zamaPublicClient.waitForTransactionReceipt({ hash });
+
+      // Non-blocking metadata write: gives oracle deterministic lookup for
+      // both safe and strict settlement flows.
+      void registerCanonicalBetTxHash(Number(market.id), userAddress, hash);
+
       setTxState({ phase: 'success', hash, shielded: true });
     } catch (err: unknown) {
       // Reset the fhevm singleton so the next retry re-initialises the SDK

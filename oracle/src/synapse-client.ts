@@ -145,30 +145,65 @@ async function uploadOnce(
   withCDN: boolean,
 ): Promise<string> {
   const providerIds = await resolvePreferredProviderIds(synapse);
+  const tag = `[Synapse${withCDN ? '/CDN' : ''}]`;
 
-  const result = await synapse.storage.upload(data, {
+  // Resolve as soon as onStored fires — the PieceCID is content-addressed and
+  // immutable from this point.  onPiecesAdded / onPiecesConfirmed are dataset
+  // bookkeeping steps that may take another 30-60s; they run in the background
+  // and do not need to block the caller.
+  let resolveOuter!: (cid: string) => void;
+  let rejectOuter!:  (err: Error) => void;
+  let storedCid = '';
+
+  const outerPromise = new Promise<string>((res, rej) => {
+    resolveOuter = res;
+    rejectOuter  = rej;
+  });
+
+  synapse.storage.upload(data, {
     withCDN,
     ...(providerIds ? { providerIds } : {}),
     callbacks: {
-      onStored: (_providerId: bigint, pieceCid: { toString(): string }) =>
-        console.log(`[Synapse${withCDN ? '/CDN' : ''}] ✓ ${label} → PieceCID: ${pieceCid}`),
+      onStored: (_providerId: bigint, pieceCid: { toString(): string }) => {
+        storedCid = pieceCid.toString();
+        console.log(`${tag} ✓ ${label} → PieceCID: ${storedCid}`);
+        resolveOuter(storedCid);   // ← resolve immediately; don't wait for confirmation
+      },
       onPiecesAdded: (tx: string) =>
-        console.log(`[Synapse${withCDN ? '/CDN' : ''}] Pieces added to data set (tx: ${tx})`),
+        console.log(`${tag} Pieces added to data set (tx: ${tx})`),
       onPiecesConfirmed: (dataSetId: bigint) =>
-        console.log(`[Synapse${withCDN ? '/CDN' : ''}] Confirmed in data set ${dataSetId}`),
+        console.log(`${tag} Confirmed in data set ${dataSetId}`),
     },
+  }).then((result: { copies: { retrievalUrl: string; role: string }[]; failures: { error: string }[]; pieceCid: { toString(): string } }) => {
+    if (!storedCid) {
+      // onStored never fired but upload resolved — shouldn't happen, but handle it
+      if (result.copies.length === 0) {
+        const reasons = result.failures.map((f) => f.error).join('; ');
+        rejectOuter(new Error(`all provider uploads failed: ${reasons || 'unknown reason'}`));
+        return;
+      }
+      resolveOuter(result.pieceCid.toString());
+    }
+    for (const copy of result.copies) {
+      console.log(`${tag} retrieval URL (${copy.role}): ${copy.retrievalUrl}`);
+    }
+  }).catch((err: Error) => {
+    if (!storedCid) {
+      // Failed before onStored — reject the caller
+      rejectOuter(err);
+    } else {
+      // Failed after onStored — CID is valid and data is retrievable, but the
+      // Filecoin data-set confirmation (PDP proof) did not land on-chain.
+      // Log prominently so it can be cross-referenced on Calibration explorer.
+      console.error(
+        `${tag} ⚠ PDP confirmation failed for ${label} (PieceCID: ${storedCid}): ${err.message}\n` +
+        `  Data is still retrievable but on-chain storage proof may be missing.\n` +
+        `  Verify at: https://calibration.filfox.info/en/search?q=${storedCid}`,
+      );
+    }
   });
 
-  if (result.copies.length === 0) {
-    const reasons = result.failures.map((f: { error: string }) => f.error).join('; ');
-    throw new Error(`all provider uploads failed: ${reasons || 'unknown reason'}`);
-  }
-
-  for (const copy of result.copies as { retrievalUrl: string; providerId: bigint; role: string }[]) {
-    console.log(`[Synapse${withCDN ? '/CDN' : ''}] retrieval URL (${copy.role}): ${copy.retrievalUrl}`);
-  }
-
-  return result.pieceCid.toString();
+  return outerPromise;
 }
 
 async function uploadWithRetries(

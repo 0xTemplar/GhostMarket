@@ -129,10 +129,29 @@ export async function submitAttestation(
     const registry   = getRegistry();
     const marketUint = marketIdToUint256(marketId);
     console.log(`[Registry] Agent ${agentId} submitting attestation for market ${marketId} (vote: ${vote ? 'YES' : 'NO'})...`);
-    const tx      = await registry.submitAttestation(agentId, marketUint, vote, storachaCid);
-    const receipt = await tx.wait();
-    console.log(`[Registry] ✓ Attestation recorded (tx: ${receipt.hash})`);
-    return receipt.hash as string;
+    try {
+      const tx      = await registry.submitAttestation(agentId, marketUint, vote, storachaCid);
+      const receipt = await tx.wait();
+      console.log(`[Registry] ✓ Attestation recorded (tx: ${receipt.hash})`);
+      return receipt.hash as string;
+    } catch (err) {
+      const msg = (err as Error).message ?? '';
+      // These are expected in re-runs or when agent is not yet registered — not fatal.
+      if (msg.includes('Already attested')) {
+        console.log(`[Registry] Agent ${agentId} market ${marketId} — already attested, skipping`);
+        return '';
+      }
+      if (msg.includes('Market finalized')) {
+        // On-chain quorum was reached by earlier agents in the write queue — correct behaviour.
+        console.log(`[Registry] Agent ${agentId} market ${marketId} — on-chain quorum already reached, skipping`);
+        return '';
+      }
+      if (msg.includes('Agent not found')) {
+        console.log(`[Registry] Agent ${agentId} not registered on Calibration — run register-agents.ts to fix`);
+        return '';
+      }
+      throw err; // re-throw unexpected errors
+    }
   });
 }
 

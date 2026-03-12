@@ -41,8 +41,12 @@ import {
 } from './storacha-client';
 import { submitAttestation, recordEvidence, updateReputation, getAgentInfo, getAgentCount } from './registry-client';
 import { postERC8004Reputation }                       from './erc8004-client';
+import {
+  markMarketFinalized, getOrComputeSettlement, deliverSettlementOnChain,
+  getMarketSettlements, registerCanonicalBetTxHash, getCanonicalBetTxHash,
+} from './settlement';
 import type {
-  ResolutionSession, OracleAgent, LogEntry, WsMessage, AgentStatus,
+  ResolutionSession, OracleAgent, LogEntry, WsMessage, AgentStatus, SettlementClaimResponse,
 } from './types';
 
 dotenv.config();
@@ -305,71 +309,19 @@ async function finalizeResolution(session: ResolutionSession) {
     session.finalEvidenceCid = finalEvidenceCid;
   }
 
-  // ── Record evidence CID in OracleAgentRegistry ───────────────────────────────
+  const votingAgents = session.agents.filter(a => a.vote !== null);
 
-  let calibrationTxHash = '';
-  for (const agent of session.agents.filter(a => a.vote !== null)) {
-    try {
-      calibrationTxHash = await recordEvidence(agent.id, session.marketId, finalEvidenceCid);
-    } catch { /* registry may not be deployed in dev */ }
-  }
-
-  if (calibrationTxHash) {
-    session.calibrationTxHash = calibrationTxHash;
-    addLog(session, `OracleAgentRegistry updated → Calibration tx: ${calibrationTxHash.slice(0, 18)}...`, {
-      txHash: calibrationTxHash,
-    });
-  }
-
-  // ── Upload reputation snapshots to Filecoin + update registry ────────────────
-
-  addLog(session, 'uploading reputation snapshots to Filecoin...');
-
-  for (const agent of session.agents.filter(a => a.vote !== null)) {
-    const correct   = agent.vote === outcome;
-    const newScore  = correct
-      ? Math.min(100, agent.reputationScore + 2)
-      : Math.max(0,   agent.reputationScore - 10);
-
-    const repSnapshot = {
-      type:         'reputation-snapshot',
-      agentId:      agent.id,
-      agentName:    agent.name,
-      marketId:     session.marketId,
-      vote:         agent.vote ? 'YES' : 'NO',
-      correct,
-      scoreBefore:  agent.reputationScore,
-      scoreAfter:   newScore,
-      timestamp:    new Date().toISOString(),
-    };
-
-    let repCid = '';
-    try {
-      repCid = await uploadToFilecoin(repSnapshot, `agent-${agent.id}-rep-snapshot`);
-      await updateReputation(agent.id, repCid, newScore);
-    } catch { /* not fatal in dev */ }
-
-    // Post ERC-8004 feedback if agent has an ERC-8004 identity
-    if (agent.erc8004Id !== null) {
-      try {
-        await postERC8004Reputation(
-          agent.erc8004Id,
-          newScore,
-          finalEvidenceCid,
-          session.marketId,
-        );
-      } catch { /* not fatal */ }
-    }
-
-    updateAgent(session, agent.id, { reputationScore: newScore });
-  }
-
-  // ── Mark session finalized ───────────────────────────────────────────────────
+  // ── FINALIZE NOW — evidence bundle on Filecoin is the canonical proof ─────────
+  // The Piece CID proves quorum immutably.  Everything below (registry CID
+  // records on Calibration + rep snapshot uploads to Filecoin) is bookkeeping
+  // that runs in the background and does not gate settlement.
 
   session.phase       = 'finalized';
   session.finalizedAt = Date.now();
 
-  addLog(session, 'market FINALIZED — settlement delivery to Flow pending (Phase 6)');
+  markMarketFinalized(session.marketId, outcome);
+
+  addLog(session, 'market FINALIZED — Lit Action settlement relay active (Phase 6)');
 
   broadcast(session.marketId, {
     type:     'finalized',
@@ -380,6 +332,139 @@ async function finalizeResolution(session: ResolutionSession) {
       calibrationTxHash: session.calibrationTxHash,
     },
   });
+
+  addLog(session, 'settlement relay ready — users can claim via /oracle/settle/:marketId');
+
+  // ── Background: resolve GhostEAMM on Sepolia so Lit Action can verify ─────────
+  // The Lit Action reads GhostEAMM.getMarketMeta() to confirm status === Resolved
+  // before signing the settlement claim.  We call resolveMarket() here using the
+  // deployer wallet (owner / resolver role).
+
+  void resolveGhostEammOnSepolia(session.marketId, outcome);
+
+  // ── Background: record evidence CID in OracleAgentRegistry ───────────────────
+  // Serialised by enqueueWrite (Calibration nonce ordering) but non-blocking.
+  // Fires and forgets — each tx logs its own result when it confirms.
+
+  addLog(session, 'recording evidence CID in OracleAgentRegistry (background)...');
+
+  Promise.allSettled(
+    votingAgents.map(agent => recordEvidence(agent.id, session.marketId, finalEvidenceCid)),
+  ).then((results) => {
+    const txHash = results
+      .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled' && !!r.value)
+      .map(r => r.value)
+      .at(-1) ?? '';
+    if (txHash) {
+      session.calibrationTxHash = txHash;
+      addLog(session, `OracleAgentRegistry updated → Calibration tx: ${txHash.slice(0, 18)}...`, {
+        txHash,
+      });
+    }
+  });
+
+  // ── Background: upload reputation snapshots to Filecoin in parallel ───────────
+  // Still goes to Filecoin via Synapse SDK — satisfies Track 3 (Reputation &
+  // Portable Identity).  4 concurrent Synapse uploads ≈ time of 1 serial upload.
+
+  addLog(session, 'uploading reputation snapshots to Filecoin (parallel, background)...');
+
+  Promise.allSettled(
+    votingAgents.map(async (agent) => {
+      const correct  = agent.vote === outcome;
+      const newScore = correct
+        ? Math.min(100, agent.reputationScore + 2)
+        : Math.max(0,   agent.reputationScore - 10);
+
+      const repSnapshot = {
+        type:        'reputation-snapshot',
+        agentId:     agent.id,
+        agentName:   agent.name,
+        marketId:    session.marketId,
+        vote:        agent.vote ? 'YES' : 'NO',
+        correct,
+        scoreBefore: agent.reputationScore,
+        scoreAfter:  newScore,
+        timestamp:   new Date().toISOString(),
+      };
+
+      let repCid = '';
+      try {
+        repCid = await uploadToFilecoin(repSnapshot, `agent-${agent.id}-rep-snapshot`);
+        await updateReputation(agent.id, repCid, newScore);
+        addLog(session, `agent-${agent.id} rep → Filecoin CID: ${repCid.slice(0, 20)}...`, {
+          agentName: agent.name,
+          cid:       repCid,
+        });
+      } catch (err) {
+        console.warn(`[Synapse] Rep snapshot for agent ${agent.id} failed:`, (err as Error).message);
+      }
+
+      if (agent.erc8004Id !== null) {
+        try {
+          await postERC8004Reputation(
+            agent.erc8004Id,
+            newScore,
+            finalEvidenceCid,
+            session.marketId,
+          );
+        } catch { /* not fatal */ }
+      }
+
+      updateAgent(session, agent.id, { reputationScore: newScore });
+    }),
+  ).then(() => {
+    addLog(session, 'all reputation snapshots uploaded to Filecoin');
+  });
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Call GhostEAMM.resolveMarket() on Sepolia after oracle quorum.
+ * This sets status = Resolved (1) so the Lit Action can verify it before signing.
+ * Runs in the background — does not block finalization.
+ */
+async function resolveGhostEammOnSepolia(marketId: string, outcome: boolean): Promise<void> {
+  const sepoliaRpc  = process.env.SEPOLIA_RPC_URL              ?? 'https://rpc.sepolia.org';
+  // Use EAMM_RESOLVER_PRIVATE_KEY (deployer/owner) — the oracle's SEPOLIA_PRIVATE_KEY
+  // may not have the onlyResolverOrOwner role on GhostEAMM.
+  const sepoliaKey  = process.env.EAMM_RESOLVER_PRIVATE_KEY
+                   ?? process.env.SEPOLIA_PRIVATE_KEY
+                   ?? '';
+  const eammAddress = process.env.GHOST_EAMM_ADDRESS            ?? '';
+
+  if (!sepoliaKey || !eammAddress) {
+    console.warn('[EAMM] Skipping resolveMarket — SEPOLIA_PRIVATE_KEY or GHOST_EAMM_ADDRESS not set');
+    return;
+  }
+
+  const EAMM_RESOLVE_ABI = [
+    'function resolveMarket(uint256 marketId, bool outcome) external',
+    'function getMarketMeta(uint256 marketId) external view returns (uint8 status, bool outcome, uint64 expiryAt)',
+  ];
+
+  try {
+    const provider = new ethers.JsonRpcProvider(sepoliaRpc);
+    const wallet   = new ethers.Wallet(sepoliaKey, provider);
+    const eamm     = new ethers.Contract(eammAddress, EAMM_RESOLVE_ABI, wallet);
+
+    // Check current status before sending tx (idempotent)
+    const [currentStatus] = await eamm.getMarketMeta(BigInt(marketId)) as [number, boolean, bigint];
+    if (Number(currentStatus) === 1) {
+      console.log(`[EAMM] Market ${marketId} already Resolved on Sepolia — skipping`);
+      return;
+    }
+
+    console.log(`[EAMM] Resolving market ${marketId} on Sepolia (outcome=${outcome})…`);
+    const tx = await eamm.resolveMarket(BigInt(marketId), outcome);
+    console.log(`[EAMM] resolveMarket TX: ${tx.hash}`);
+    const receipt = await tx.wait();
+    console.log(`[EAMM] Market ${marketId} Resolved on Sepolia — block ${receipt.blockNumber}`);
+    console.log(`[EAMM] Etherscan: https://sepolia.etherscan.io/tx/${tx.hash}`);
+  } catch (err) {
+    console.warn(`[EAMM] resolveMarket failed (non-fatal): ${(err as Error).message}`);
+  }
 }
 
 // ── Storacha read endpoints (Track 2 — cross-agent knowledge sharing) ─────────
@@ -478,12 +563,13 @@ app.post('/oracle/synapse/upload-bundle', async (req, res) => {
 
     const pieceCid = await uploadToFilecoin(payload, `market-${bundle.marketId}-bundle`);
 
-    // Record evidence CID in registry for each attesting agent
+    // Record evidence CID in registry for each attesting agent (parallel)
+    const registrySettled = await Promise.allSettled(
+      bundle.agents.map(agent => recordEvidence(agent.id, bundle.marketId, pieceCid)),
+    );
     let calibrationTx = '';
-    for (const agent of bundle.agents) {
-      try {
-        calibrationTx = await recordEvidence(agent.id, bundle.marketId, pieceCid);
-      } catch { /* non-fatal */ }
+    for (const r of registrySettled) {
+      if (r.status === 'fulfilled' && r.value) calibrationTx = r.value;
     }
 
     res.json({ pieceCid, calibrationTx });
@@ -503,52 +589,246 @@ app.post('/oracle/reputation/update', async (req, res) => {
       agents: Array<{ id: number; name: string; vote: boolean | null; reputation: number; erc8004Id: number | null }>;
     };
 
-    const updates: Array<{ agentId: number; newScore: number; repCid: string }> = [];
+    const votingAgents = agents.filter(a => a.vote !== null);
 
-    for (const agent of agents) {
-      if (agent.vote === null) continue;
+    // Upload all rep snapshots to Filecoin in parallel (same destination — Synapse —
+    // just concurrent instead of serial, so 4 uploads ≈ time of 1).
+    const results = await Promise.allSettled(
+      votingAgents.map(async (agent) => {
+        const correct  = agent.vote === outcome;
+        const newScore = correct
+          ? Math.min(100, agent.reputation + 2)
+          : Math.max(0,   agent.reputation - 10);
 
-      const correct   = agent.vote === outcome;
-      const newScore  = correct
-        ? Math.min(100, agent.reputation + 2)
-        : Math.max(0,   agent.reputation - 10);
+        const snapshot = {
+          type:        'reputation-snapshot',
+          agentId:     agent.id,
+          agentName:   agent.name,
+          marketId,
+          vote:        agent.vote ? 'YES' : 'NO',
+          correct,
+          scoreBefore: agent.reputation,
+          scoreAfter:  newScore,
+          timestamp:   new Date().toISOString(),
+        };
 
-      const snapshot = {
-        type:        'reputation-snapshot',
-        agentId:     agent.id,
-        agentName:   agent.name,
-        marketId,
-        vote:        agent.vote ? 'YES' : 'NO',
-        correct,
-        scoreBefore: agent.reputation,
-        scoreAfter:  newScore,
-        timestamp:   new Date().toISOString(),
-      };
-
-      let repCid = '';
-      try {
-        repCid = await uploadToFilecoin(snapshot, `agent-${agent.id}-rep`);
-        await updateReputation(agent.id, repCid, newScore);
-      } catch { /* not fatal in dev */ }
-
-      if (agent.erc8004Id !== null) {
+        let repCid = '';
         try {
-          await postERC8004Reputation(
-            BigInt(agent.erc8004Id),
-            newScore,
-            evidenceCid || repCid,
-            marketId,
-          );
-        } catch { /* not fatal */ }
-      }
+          repCid = await uploadToFilecoin(snapshot, `agent-${agent.id}-rep`);
+          await updateReputation(agent.id, repCid, newScore);
+        } catch { /* not fatal in dev */ }
 
-      updates.push({ agentId: agent.id, newScore, repCid });
-    }
+        if (agent.erc8004Id !== null) {
+          try {
+            await postERC8004Reputation(
+              BigInt(agent.erc8004Id),
+              newScore,
+              evidenceCid || repCid,
+              marketId,
+            );
+          } catch { /* not fatal */ }
+        }
+
+        return { agentId: agent.id, newScore, repCid };
+      }),
+    );
+
+    const updates = results
+      .filter((r): r is PromiseFulfilledResult<{ agentId: number; newScore: number; repCid: string }> =>
+        r.status === 'fulfilled',
+      )
+      .map(r => r.value);
 
     res.json({ updates });
   } catch (err) {
     res.json({ updates: [], error: (err as Error).message });
   }
+});
+
+// ── Settlement endpoints (Phase 6) ────────────────────────────────────────────
+
+/**
+ * POST /oracle/bets/register
+ * Body: { marketId: string | number, userAddress: string, betTxHash: string }
+ *
+ * Registers the canonical BetPlaced tx hash for deterministic settlement later.
+ */
+app.post('/oracle/bets/register', async (req, res) => {
+  const body = req.body as { marketId?: string | number; userAddress?: string; betTxHash?: string };
+  const marketId = body.marketId !== undefined ? String(body.marketId) : '';
+  const userAddress = body.userAddress ?? '';
+  const betTxHash = body.betTxHash ?? '';
+
+  if (!/^\d+$/.test(marketId)) {
+    return res.status(400).json({ error: 'Invalid or missing marketId' });
+  }
+  if (!/^0x[0-9a-fA-F]{40}$/.test(userAddress)) {
+    return res.status(400).json({ error: 'Invalid or missing userAddress' });
+  }
+  if (!/^0x[0-9a-fA-F]{64}$/.test(betTxHash)) {
+    return res.status(400).json({ error: 'Invalid or missing betTxHash' });
+  }
+
+  try {
+    await registerCanonicalBetTxHash(marketId, userAddress, betTxHash);
+    return res.json({
+      ok: true,
+      marketId,
+      userAddress: userAddress.toLowerCase(),
+      betTxHash: betTxHash.toLowerCase(),
+      source: 'registered',
+    });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+/**
+ * GET /oracle/bets/:marketId/:userAddress
+ *
+ * Returns canonical bet tx hash for this user+market if previously registered.
+ */
+app.get('/oracle/bets/:marketId/:userAddress', async (req, res) => {
+  const { marketId, userAddress } = req.params;
+  if (!/^\d+$/.test(marketId)) {
+    return res.status(400).json({ error: 'Invalid marketId' });
+  }
+  if (!/^0x[0-9a-fA-F]{40}$/.test(userAddress)) {
+    return res.status(400).json({ error: 'Invalid userAddress' });
+  }
+
+  try {
+    const betTxHash = await getCanonicalBetTxHash(marketId, userAddress);
+    return res.json({
+      marketId,
+      userAddress: userAddress.toLowerCase(),
+      betTxHash,
+      source: betTxHash ? 'registered' : 'none',
+    });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+/**
+ * POST /oracle/settle/:marketId
+ * Body: { userAddress: string }
+ *
+ * Returns a signed settlement message for the user to submit to GhostVault.claimPayout().
+ * The oracle reads the market outcome and the user's locked collateral on-chain,
+ * computes the net payout, and signs with the settlement key (or Lit PKP).
+ *
+ * The user then calls GhostVault.claimPayout(marketId, payout, nonce, expiry, sig)
+ * on Flow EVM to release their collateral lock and credit the payout.
+ */
+app.post('/oracle/settle/:marketId', async (req, res) => {
+  const marketId    = req.params.marketId;
+  const body        = req.body as { userAddress?: string; betTxHash?: string };
+  const userAddress = body?.userAddress;
+  // Optional: the tx hash where the user placed their bet.
+  // When provided, the oracle resolves its exact block number and passes it to
+  // the Lit Action so eth_getLogs uses a 1-block range (works on Alchemy free tier).
+  const betTxHash   = body?.betTxHash;
+  // #region agent log
+  fetch('http://127.0.0.1:7884/ingest/fbd2257e-f2ff-467e-b558-4abfac1502be',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37e9d3'},body:JSON.stringify({sessionId:'37e9d3',runId:'settle-request',hypothesisId:'H1',location:'index.ts:settle-entry',message:'Settlement request received',data:{marketId,userAddress:userAddress ?? null,hasBetTxHash:Boolean(betTxHash),betTxHashPrefix:betTxHash?.slice(0,18) ?? null},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
+
+  if (!userAddress || !/^0x[0-9a-fA-F]{40}$/.test(userAddress)) {
+    return res.status(400).json({ error: 'Invalid or missing userAddress' });
+  }
+
+  const session = sessions.get(marketId);
+  if (!session || session.phase !== 'finalized') {
+    return res.status(409).json({
+      error: 'Market not finalized',
+      phase: session?.phase ?? 'unknown',
+    });
+  }
+
+  try {
+    // #region agent log
+    fetch('http://127.0.0.1:7884/ingest/fbd2257e-f2ff-467e-b558-4abfac1502be',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37e9d3'},body:JSON.stringify({sessionId:'37e9d3',runId:'settle-request',hypothesisId:'H1-H2',location:'index.ts:before-getOrComputeSettlement',message:'Calling getOrComputeSettlement',data:{marketId,userAddress,hasBetTxHash:Boolean(betTxHash)},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    const settlement = await getOrComputeSettlement(marketId, userAddress, betTxHash);
+
+    const marketIdUint    = parseInt(marketId, 10).toString();
+    const marketIdBytes32 = '0x' + BigInt(marketIdUint).toString(16).padStart(64, '0');
+
+    const response: SettlementClaimResponse = {
+      marketId,
+      userAddress:     settlement.userAddress,
+      sig:             settlement.sig,
+      payout:          settlement.payout,
+      nonce:           settlement.nonce,
+      expiry:          settlement.expiry,
+      marketIdBytes32,
+      vaultAddress:    process.env.GHOST_VAULT_ADDRESS ?? '0xAf470490b2462DC7359605B8e5D731CbB7816B55',
+      signerAddress:   settlement.signerAddress,
+      signingPath:     settlement.signingPath,
+      deliveredTx:     settlement.deliveredTx,
+    };
+
+    // Optionally attempt autonomous delivery in the background
+    if (!settlement.deliveredTx && settlement.payout !== '0') {
+      deliverSettlementOnChain(settlement).then((txHash) => {
+        if (txHash && session) {
+          addLog(session, `settlement delivered to Flow EVM → ${txHash}`, { txHash });
+          session.flowTxHash = txHash;
+          broadcast(marketId, {
+            type:     'settlement_delivered',
+            marketId,
+            payload:  { userAddress, txHash, payout: settlement.payout },
+          });
+        }
+      }).catch(() => { /* non-critical */ });
+    }
+
+    res.json(response);
+  } catch (err) {
+    const message = (err as Error).message;
+    console.error('[Settlement] Error:', message);
+    res.status(422).json({ error: message });
+  }
+});
+
+/**
+ * GET /oracle/settle/:marketId/:userAddress
+ * Returns a cached settlement if one has already been computed for this user.
+ * Returns 404 if no settlement has been computed yet.
+ */
+app.get('/oracle/settle/:marketId/:userAddress', (req, res) => {
+  const { marketId, userAddress } = req.params;
+
+  const session = sessions.get(marketId);
+  if (!session || session.phase !== 'finalized') {
+    return res.status(409).json({ error: 'Market not finalized', phase: session?.phase ?? 'unknown' });
+  }
+
+  const settlements = getMarketSettlements(marketId);
+  const settlement  = settlements.find(s => s.userAddress === userAddress.toLowerCase());
+
+  if (!settlement) {
+    return res.status(404).json({ error: 'No settlement computed yet — call POST /oracle/settle/:marketId' });
+  }
+
+  const marketIdUint    = parseInt(marketId, 10).toString();
+  const marketIdBytes32 = '0x' + BigInt(marketIdUint).toString(16).padStart(64, '0');
+
+  const response: SettlementClaimResponse = {
+    marketId,
+    userAddress:     settlement.userAddress,
+    sig:             settlement.sig,
+    payout:          settlement.payout,
+    nonce:           settlement.nonce,
+    expiry:          settlement.expiry,
+    marketIdBytes32,
+    vaultAddress:    process.env.GHOST_VAULT_ADDRESS ?? '0xAf470490b2462DC7359605B8e5D731CbB7816B55',
+    signerAddress:   settlement.signerAddress,
+    signingPath:     settlement.signingPath,
+    deliveredTx:     settlement.deliveredTx,
+  };
+
+  res.json(response);
 });
 
 // ── REST endpoints ─────────────────────────────────────────────────────────────

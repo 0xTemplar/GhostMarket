@@ -8,6 +8,7 @@
  *   3. Submit the encrypted payload to GhostEAMM.placeBet() on Sepolia.
  *   4. Read back the position handle and confirm it is non-zero.
  *   5. Print the encrypted pool handles (opaque — no plaintext visible).
+ *   6. Register canonical betTxHash with oracle for deterministic settlement.
  *
  * SDK config follows docs.zama.org/protocol/relayer-sdk-guides/fhevm-relayer/initialization
  * Using SepoliaConfig which includes:
@@ -22,6 +23,7 @@
  */
 
 import { ethers } from 'hardhat';
+import type { Log, LogDescription } from 'ethers';
 import { createInstance, SepoliaConfig } from '@zama-fhe/relayer-sdk/node';
 import dotenv from 'dotenv';
 dotenv.config();
@@ -30,6 +32,7 @@ dotenv.config();
 
 const GHOST_EAMM_ADDRESS = process.env.GHOST_EAMM_ADDRESS!;
 const SEPOLIA_RPC_URL    = process.env.SEPOLIA_RPC_URL ?? 'https://rpc.sepolia.org';
+const ORACLE_BASE_URL    = process.env.ORACLE_BASE_URL ?? 'http://localhost:8080';
 
 const GHOST_EAMM_ABI = [
   'function placeBet(uint256 marketId, bool side, bytes32 encAmount, bytes calldata inputProof) external',
@@ -52,6 +55,48 @@ function toHex(v: string | Uint8Array): `0x${string}` {
   return typeof v === 'string'
     ? (v.startsWith('0x') ? v as `0x${string}` : `0x${v}`)
     : `0x${Buffer.from(v).toString('hex')}`;
+}
+
+async function registerCanonicalBetTxHash(
+  marketId: bigint,
+  userAddress: string,
+  betTxHash: string,
+): Promise<void> {
+  const fetchFn = (globalThis as unknown as {
+    fetch?: (
+      input: string,
+      init?: {
+        method?: string;
+        headers?: Record<string, string>;
+        body?: string;
+      },
+    ) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
+  }).fetch;
+
+  if (!fetchFn) {
+    console.log('⚠ fetch() not available in this runtime, skipping oracle bet registration');
+    return;
+  }
+
+  try {
+    const res = await fetchFn(`${ORACLE_BASE_URL}/oracle/bets/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        marketId: marketId.toString(),
+        userAddress,
+        betTxHash,
+      }),
+    });
+    const body = await res.text();
+    if (!res.ok) {
+      console.log(`⚠ Oracle bet registration failed (${res.status}): ${body}`);
+      return;
+    }
+    console.log(`✓ Registered canonical betTxHash with oracle: ${betTxHash}`);
+  } catch (err) {
+    console.log(`⚠ Oracle bet registration error: ${(err as Error).message}`);
+  }
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────
@@ -105,9 +150,10 @@ async function main() {
 
   const handle     = toHex(ciphertexts.handles[0]);
   const inputProof = toHex(ciphertexts.inputProof);
-  const proofBytes = typeof ciphertexts.inputProof === 'string'
-    ? ciphertexts.inputProof.replace('0x','').length / 2
-    : ciphertexts.inputProof.length;
+  const proof = ciphertexts.inputProof as unknown as string | Uint8Array;
+  const proofBytes = typeof proof === 'string'
+    ? (proof.startsWith('0x') ? (proof.length - 2) / 2 : proof.length / 2)
+    : proof.length;
 
   console.log('  Encrypted handle:    ', maskHandle(handle));
   console.log('  Proof length (bytes):', proofBytes);
@@ -124,12 +170,16 @@ async function main() {
   const receipt = await tx.wait();
   console.log('✓ Confirmed in block', receipt.blockNumber);
 
+  // Register canonical tx hash so oracle settlement can be deterministic
+  // without requiring betTxHash to be passed at claim time.
+  await registerCanonicalBetTxHash(marketId, signer.address, tx.hash);
+
   // Parse BetPlaced — confirm NO amount in the event.
   const iface  = new ethers.Interface(GHOST_EAMM_ABI);
   const events = receipt.logs
-    .map((l: ethers.Log) => { try { return iface.parseLog(l); } catch { return null; } })
-    .filter(Boolean);
-  const betEvent = events.find((e: ethers.LogDescription) => e!.name === 'BetPlaced');
+    .map((l: Log) => { try { return iface.parseLog(l); } catch { return null; } })
+    .filter((e: LogDescription | null): e is LogDescription => e !== null);
+  const betEvent = events.find((e: LogDescription) => e.name === 'BetPlaced');
   if (betEvent) {
     console.log('\nBetPlaced event:');
     console.log('  marketId:', betEvent.args.marketId.toString());

@@ -3,56 +3,56 @@
     "id": 1,
     "name": "Cipher",
     "address": "0x110Cd85FA8E7329b480355e5E1DA99BE7F28AAB0",
-    "metadataCid": "placeholder:Cipher-metadata",
-    "erc8004Id": "1706",
-    "calibrationTx": ""
+    "metadataCid": "bafkzcibdx4bqkkup35gmjzeu4l64e34rfkvtjuyyz2qdmhkm7d56zpjjfgdmplqi",
+    "erc8004Id": "1747",
+    "calibrationTx": "0x0bb4abc54409a12a78c98ca5e002a771a5ad91d4654016e4d67e5d3ae4dc2774"
   },
   {
     "id": 2,
     "name": "Specter",
     "address": "0xEeF50e635bf93293a6AF6414E25AbF13B0c8A551",
-    "metadataCid": "placeholder:Specter-metadata",
-    "erc8004Id": "1707",
-    "calibrationTx": "0xad535561f7985948f0da4337d69172b676654a12afeb6f300af36519afcefd67"
+    "metadataCid": "bafkzcibdxqbqlkfepyhnjwczkg2vpfgreibgnhjs2x6yjx5od7tbk2zth4b4murq",
+    "erc8004Id": "1748",
+    "calibrationTx": "0x8f66e106123f59fcbcb4a116479624edcc15a5131bf2a21bb989844d02669f27"
   },
   {
     "id": 3,
     "name": "Wraith",
     "address": "0x48F6D48Cfa1aE960bf284e1d7C3c8fA13bC63d88",
-    "metadataCid": "placeholder:Wraith-metadata",
-    "erc8004Id": "1710",
-    "calibrationTx": "0x140ed7255c61e8ff5249419357e809b29c3e7d2c56df4104c708b197e5ee65d7"
+    "metadataCid": "bafkzcibdxubqlwxve74xhaibatzoopsrs7fbguilg6bkttbpl6qznvvkulnbhnjg",
+    "erc8004Id": "1749",
+    "calibrationTx": "0xcf958dce8e0082958b13b6b8733f9ab75bc177bbad7d8f252c1ce8130a4c8abe"
   },
   {
     "id": 4,
     "name": "Phantom",
     "address": "0x72bf54C6CC1d675ec4dFbdC967469088036d738c",
-    "metadataCid": "placeholder:Phantom-metadata",
-    "erc8004Id": "1711",
-    "calibrationTx": ""
+    "metadataCid": "bafkzcibdxubqkih2auxj7qz76tecwngh2dzjzrpm3ydxfyirfssiulbkdez5s4zb",
+    "erc8004Id": "1750",
+    "calibrationTx": "0x46bb58e412ac60c84a66cfccb465cbcbd9c81dbb56ae4dd70f64736ed18b52dc"
   },
   {
     "id": 5,
     "name": "Shade",
     "address": "0x56B081777c83535eca8393B4B2C257a4760B8F13",
-    "metadataCid": "placeholder:Shade-metadata",
-    "erc8004Id": "1712",
-    "calibrationTx": "0x7020b47e4246246be9ad452931e6885a5c3d91f7dfe33f1e639c8f49727c14bd"
+    "metadataCid": "bafkzcibdyebqlsren5lfh3jrbkvaka3dv2enug4rluusbt3vyb25evhsawlhlham",
+    "erc8004Id": "1751",
+    "calibrationTx": "0xad1d89da3f958230ba2344f9303a2330c864afff94db04a20d1b3c6b0d63c42a"
   },
   {
     "id": 6,
     "name": "Echo",
     "address": "0x7fFf32C29AEE560cD3fD4fF0dB2e2e24A72FA313",
-    "metadataCid": "placeholder:Echo-metadata",
-    "erc8004Id": "1713",
-    "calibrationTx": "0x9d2ad313755c3870c9661752166fd7c2432bf77c7eae5da322599b3da34ae8a6"
+    "metadataCid": "bafkzcibdyubqltwp5ecrirazigiw7hjr7h2f664qswymruvxilon2zjbtuslctri",
+    "erc8004Id": "1752",
+    "calibrationTx": "0xc5a3cd7a57ca89a23ee0d6098f2ff31ae1249977128afe39d2d0f58101a2bcd8"
   },
   {
     "id": 7,
     "name": "Vex",
     "address": "0x4bdE2786588aF5b7beC6Ea9dfA65B6ceFA52B1E1",
-    "metadataCid": "placeholder:Vex-metadata",
-    "erc8004Id": "1714",
-    "calibrationTx": "0xd5f67727753401f03ee2e60a9b4079707432303d209ddb78accca2969a6402aa"
+    "metadataCid": "bafkzcibdyqbqlpbey434az7xpmz25yfblprjcorofuvwh5rcxcn35uhuaebdlka4",
+    "erc8004Id": "1753",
+    "calibrationTx": "0xb990718803ae7452ef8e54364251f956e56fafb0fe1781c252ac41dcd7204aa9"
   }
 ]

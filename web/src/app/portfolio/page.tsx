@@ -5,12 +5,12 @@ import Link from 'next/link';
 import { motion } from 'framer-motion';
 import {
   ArrowRight, Ghost, Loader2, Clock, ArrowUpRight,
-  RefreshCw, Shield, Lock, Eye, EyeOff,
+  RefreshCw, Shield, Lock, Eye, EyeOff, Zap, CheckCircle2, AlertCircle,
 } from 'lucide-react';
 import { mockPositions, mockPortfolioStats } from '@/data/markets';
 import { PortfolioSummary } from '@/components/portfolio-summary';
 import { PortfolioPositionRow } from '@/components/portfolio-position-row';
-import { useFlowAuth } from '@/lib/flow/provider';
+import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
 import {
   readAllMarkets, readUserPosition, isMarketDeployed,
   type OnChainMarket,
@@ -19,8 +19,14 @@ import {
   readEammMarketMeta, readEammPositionHandles, isEammDeployed,
   type EammMarketMeta, type PositionHandles,
 } from '@/lib/flow/eamm';
-import { readLockedAmount } from '@/lib/flow/vault';
+import {
+  readLockedAmount,
+  claimVaultPayout,
+  eammMarketIdToBytes32,
+  readSettlementSigner,
+} from '@/lib/flow/vault';
 import { formatTimeRemaining, cn } from '@/lib/utils';
+import { requestSettlement, type SettlementClaim } from '@/lib/oracle-client';
 
 // ─── Shielded eAMM position type ─────────────────────────────────────────────
 
@@ -34,6 +40,22 @@ interface ShieldedPosition {
   revealed:      boolean;       // true after user-authorised gateway decryption
   revealedYes:   string | null; // plaintext FLOW after reveal
   revealedNo:    string | null;
+}
+
+// ─── Claim state per position ─────────────────────────────────────────────────
+
+type ClaimPhase =
+  | 'idle'
+  | 'requesting'    // fetching settlement sig from oracle
+  | 'submitting'    // submitting claimPayout() tx on Flow EVM
+  | 'success'
+  | 'error';
+
+interface ClaimState {
+  phase:   ClaimPhase;
+  txHash:  string | null;
+  payout:  string | null;   // formatted FLOW
+  error:   string | null;
 }
 
 // ─── On-chain position type ───────────────────────────────────────────────────
@@ -74,13 +96,21 @@ function ShieldedPositionRow({
   pos,
   index,
   onReveal,
+  onClaim,
+  claimState,
 }: {
-  pos:      ShieldedPosition;
-  index:    number;
-  onReveal: (marketId: number) => void;
+  pos:        ShieldedPosition;
+  index:      number;
+  onReveal:   (marketId: number) => void;
+  onClaim:    (marketId: number) => void;
+  claimState: ClaimState;
 }) {
-  const hasYes = pos.yesHandle !== '0x' + '0'.repeat(64);
-  const hasNo  = pos.noHandle  !== '0x' + '0'.repeat(64);
+  const hasYes    = pos.yesHandle !== '0x' + '0'.repeat(64);
+  const hasNo     = pos.noHandle  !== '0x' + '0'.repeat(64);
+  const resolved  = pos.meta.status === 1;
+  const hasLocked = parseFloat(pos.lockedCollateral) > 0;
+
+  const FLOWSCAN = 'https://evm-testnet.flowscan.io/tx/';
 
   return (
     <motion.div
@@ -105,6 +135,17 @@ function ShieldedPositionRow({
               <Lock className="h-2.5 w-2.5" />
               Shielded
             </span>
+            {resolved && hasLocked && claimState.phase === 'idle' && (
+              <span className="px-2.5 py-1 rounded-lg text-xs font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 animate-pulse">
+                Claim available
+              </span>
+            )}
+            {claimState.phase === 'success' && (
+              <span className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-emerald-500/10 text-emerald-400">
+                <CheckCircle2 className="h-3 w-3" />
+                Claimed
+              </span>
+            )}
             <span className="flex items-center gap-1 text-xs text-slate-500">
               <Clock className="h-3 w-3" />
               {formatTimeRemaining(new Date(pos.meta.expiryAt * 1000).toISOString())}
@@ -115,13 +156,23 @@ function ShieldedPositionRow({
           </h3>
         </div>
 
-        <div className="flex items-center gap-6 sm:gap-8 sm:text-right shrink-0">
+        <div className="flex items-center gap-4 sm:gap-6 sm:text-right shrink-0 flex-wrap justify-end">
           {/* Locked collateral — visible (user's own custody record) */}
-          {parseFloat(pos.lockedCollateral) > 0 && (
+          {hasLocked && (
             <div>
               <div className="text-xs text-slate-500 mb-0.5">Collateral</div>
               <div className="font-mono text-sm font-semibold text-amber-400">
                 {parseFloat(pos.lockedCollateral).toFixed(4)} FLOW
+              </div>
+            </div>
+          )}
+
+          {/* Claimed payout */}
+          {claimState.phase === 'success' && claimState.payout && (
+            <div>
+              <div className="text-xs text-slate-500 mb-0.5">Payout</div>
+              <div className="font-mono text-sm font-semibold text-emerald-400">
+                {claimState.payout} FLOW
               </div>
             </div>
           )}
@@ -150,17 +201,69 @@ function ShieldedPositionRow({
               ? <><EyeOff className="h-3.5 w-3.5" /> Hide</>
               : <><Eye  className="h-3.5 w-3.5" /> Reveal</>}
           </button>
+
+          {/* Claim payout button — shown when market is resolved and lock exists */}
+          {resolved && hasLocked && claimState.phase !== 'success' && (
+            <button
+              onClick={() => onClaim(pos.marketId)}
+              disabled={claimState.phase === 'requesting' || claimState.phase === 'submitting'}
+              className={cn(
+                'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all',
+                claimState.phase === 'error'
+                  ? 'border border-rose-500/30 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20'
+                  : 'border border-indigo-500/30 bg-indigo-500 hover:bg-indigo-400 text-white',
+                (claimState.phase === 'requesting' || claimState.phase === 'submitting') && 'opacity-70 cursor-wait',
+              )}
+            >
+              {claimState.phase === 'requesting' && (
+                <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Signing…</>
+              )}
+              {claimState.phase === 'submitting' && (
+                <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Claiming…</>
+              )}
+              {claimState.phase === 'error' && (
+                <><AlertCircle className="h-3.5 w-3.5" /> Retry</>
+              )}
+              {claimState.phase === 'idle' && (
+                <><Zap className="h-3.5 w-3.5" /> Claim</>
+              )}
+            </button>
+          )}
         </div>
       </div>
 
-      {pos.revealed && (
+      {/* Claim error */}
+      {claimState.phase === 'error' && claimState.error && (
+        <p className="mt-3 text-[11px] text-rose-400 border-t border-rose-500/10 pt-3">
+          {claimState.error}
+        </p>
+      )}
+
+      {/* Success: tx link */}
+      {claimState.phase === 'success' && claimState.txHash && (
+        <p className="mt-3 text-[11px] text-emerald-400 border-t border-emerald-500/10 pt-3 flex items-center gap-1">
+          <CheckCircle2 className="h-3 w-3 shrink-0" />
+          Payout claimed.{' '}
+          <a
+            href={`${FLOWSCAN}${claimState.txHash}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-emerald-300 transition-colors"
+          >
+            View on Flowscan →
+          </a>
+        </p>
+      )}
+
+      {pos.revealed && claimState.phase !== 'success' && (
         <p className="mt-3 text-[11px] text-slate-500 border-t border-white/5 pt-3">
           Revealed via Zama gateway decryption. Only you can see this value.
         </p>
       )}
-      {parseFloat(pos.lockedCollateral) > 0 && (
+      {hasLocked && claimState.phase === 'idle' && (
         <p className="mt-3 text-[11px] text-amber-500/60 border-t border-white/5 pt-3">
-          {parseFloat(pos.lockedCollateral).toFixed(4)} FLOW locked as collateral on Flow EVM — released at settlement.
+          {parseFloat(pos.lockedCollateral).toFixed(4)} FLOW locked as collateral on Flow EVM —
+          {resolved ? ' market resolved, claim your payout above.' : ' released at settlement.'}
         </p>
       )}
     </motion.div>
@@ -269,6 +372,7 @@ function OnChainPositionRow({
 
 export default function PortfolioPage() {
   const { user, isLoading } = useFlowAuth();
+  const walletClient = useFlowWalletClient();
 
   const [onChainPositions, setOnChainPositions]     = useState<OnChainPosition[]>([]);
   const [loadingChain, setLoadingChain]             = useState(false);
@@ -276,6 +380,9 @@ export default function PortfolioPage() {
 
   const [shieldedPositions, setShieldedPositions]   = useState<ShieldedPosition[]>([]);
   const [loadingShielded, setLoadingShielded]       = useState(false);
+
+  // claimStates[marketId] → ClaimState
+  const [claimStates, setClaimStates] = useState<Record<number, ClaimState>>({});
 
   const fetchOnChainPositions = useCallback(async () => {
     if (!user.evmAddress || !isMarketDeployed()) return;
@@ -294,6 +401,8 @@ export default function PortfolioPage() {
             user.evmAddress as `0x${string}`,
           );
           if (!pos || (pos.yesAmount === 0n && pos.noAmount === 0n)) return;
+          // Closed position: resolved + already claimed.
+          if (market.status === 1 && pos.claimed) return;
 
           const yesFlow = Number(pos.yesAmount) / 1e18;
           const noFlow  = Number(pos.noAmount)  / 1e18;
@@ -347,6 +456,8 @@ export default function PortfolioPage() {
               readEammMarketMeta(market.id),
               readLockedAmount(user.evmAddress as `0x${string}`, market.id),
             ]);
+            // Closed shielded position: market resolved and collateral lock released.
+            if (meta.status === 1 && Number(lockedCollateral) === 0) return;
             results.push({
               marketId:         market.id,
               marketTitle:      market.title,
@@ -397,6 +508,60 @@ export default function PortfolioPage() {
       ),
     );
   }, []);
+
+  /**
+   * Claim payout for a resolved shielded market (Phase 6).
+   *
+   * 1. Request a signed settlement claim from the oracle service.
+   * 2. Submit GhostVault.claimPayout() on Flow EVM with the oracle signature.
+   * 3. Show success + Flowscan link.
+   */
+  const handleClaim = useCallback(async (marketId: number) => {
+    if (!user.evmAddress || !walletClient) return;
+
+    const defaultState: ClaimState = { phase: 'idle', txHash: null, payout: null, error: null };
+    const setPhase = (patch: Partial<ClaimState>) =>
+      setClaimStates(prev => ({
+        ...prev,
+        [marketId]: { ...defaultState, ...prev[marketId], ...patch },
+      }));
+
+    try {
+      setPhase({ phase: 'requesting', error: null });
+
+      // Ask oracle for the signed settlement message
+      const claim = await requestSettlement(marketId.toString(), user.evmAddress);
+
+      const onChainSigner = await readSettlementSigner();
+      if (onChainSigner && onChainSigner.toLowerCase() !== claim.signerAddress.toLowerCase()) {
+        throw new Error(
+          `Settlement signer mismatch: vault trusts ${onChainSigner}, oracle signed with ${claim.signerAddress}. ` +
+          'Ask admin to update GhostVault.settlementSigner.',
+        );
+      }
+
+      setPhase({ phase: 'submitting' });
+
+      // Submit claimPayout() to GhostVault on Flow EVM
+      const txHash = await claimVaultPayout(
+        walletClient,
+        eammMarketIdToBytes32(marketId),
+        claim.payout,
+        claim.nonce,
+        claim.expiry,
+        claim.sig,
+      );
+
+      const payoutFlow = (Number(BigInt(claim.payout)) / 1e18).toFixed(4);
+
+      setPhase({ phase: 'success', txHash, payout: payoutFlow });
+      // Refresh lists so claimed/closed positions disappear from the open view.
+      await Promise.all([fetchShieldedPositions(), fetchOnChainPositions()]);
+    } catch (err) {
+      const message = (err as Error).message ?? 'Claim failed';
+      setPhase({ phase: 'error', error: message });
+    }
+  }, [user.evmAddress, walletClient, fetchShieldedPositions, fetchOnChainPositions]);
 
   useEffect(() => {
     fetchOnChainPositions();
@@ -471,6 +636,8 @@ export default function PortfolioPage() {
                     pos={pos}
                     index={i}
                     onReveal={handleReveal}
+                    onClaim={handleClaim}
+                    claimState={claimStates[pos.marketId] ?? { phase: 'idle', txHash: null, payout: null, error: null }}
                   />
                 ))}
               </div>
