@@ -21,6 +21,7 @@ const CALIBRATION_EXPLORER_TX_BASE =
 
 type WsMessage =
   | { type: 'session_init'; marketId: string; payload: OracleSession }
+  | { type: 'session_patch'; marketId: string; payload: Partial<OracleSession> }
   | { type: 'agent_update'; marketId: string; payload: OracleAgentView }
   | { type: 'log'; marketId: string; payload: OracleLogEntry }
   | { type: 'quorum_reached'; marketId: string; payload: { yesVotes: number; noVotes: number; outcome: boolean } }
@@ -340,6 +341,8 @@ export function OracleRoom() {
               const agents = prev.agents.map((a) => a.id === msg.payload.id ? { ...a, ...msg.payload } : a);
               return { ...prev, agents };
             }
+            case 'session_patch':
+              return { ...prev, ...msg.payload };
             case 'log':
               return { ...prev, log: [...prev.log, msg.payload] };
             case 'quorum_reached':
@@ -429,6 +432,8 @@ export function OracleRoom() {
   const phase = session?.phase ?? 'idle';
   const isFinalized = phase === 'finalized';
   const isLive = phase === 'collecting' || phase === 'quorum_reached' || phase === 'uploading';
+  const sepoliaSync = session?.sepoliaResolutionSync ?? { status: 'idle' as const, txHash: null };
+  const flowSync = session?.flowResolutionSync ?? { status: 'idle' as const, txHash: null };
 
   return (
     <div className="space-y-5">
@@ -761,6 +766,62 @@ export function OracleRoom() {
                 </div>
               )}
             </div>
+          </div>
+
+          {/* ── Cross-chain Status Sync ─────────────────────────────────────── */}
+          <div className="rounded-2xl border border-white/6 bg-[#070c1a] p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <Activity className="h-4 w-4 text-cyan-400" />
+              <h2 className="text-sm font-semibold text-white">Cross-chain Sync</h2>
+            </div>
+            <div className="space-y-2 font-mono text-[11px]">
+              <div className="flex items-center justify-between rounded-lg border border-white/6 bg-[#0a0f1e] px-3 py-2">
+                <span className="text-slate-500">Sepolia (canonical)</span>
+                <span className={cn(
+                  sepoliaSync.status === 'synced' && 'text-emerald-300',
+                  sepoliaSync.status === 'pending' && 'text-amber-300',
+                  sepoliaSync.status === 'failed' && 'text-rose-300',
+                  sepoliaSync.status === 'skipped' && 'text-slate-400',
+                  sepoliaSync.status === 'idle' && 'text-slate-500',
+                )}>
+                  {sepoliaSync.status}
+                </span>
+              </div>
+              <div className="flex items-center justify-between rounded-lg border border-white/6 bg-[#0a0f1e] px-3 py-2">
+                <span className="text-slate-500">Flow (mirrored)</span>
+                <span className={cn(
+                  flowSync.status === 'synced' && 'text-emerald-300',
+                  flowSync.status === 'pending' && 'text-amber-300',
+                  flowSync.status === 'failed' && 'text-rose-300',
+                  flowSync.status === 'skipped' && 'text-slate-400',
+                  flowSync.status === 'idle' && 'text-slate-500',
+                )}>
+                  {flowSync.status}
+                </span>
+              </div>
+            </div>
+            {(sepoliaSync.txHash || flowSync.txHash) && (
+              <div className="mt-3 space-y-2">
+                <HashRow
+                  label="Sepolia resolve TX"
+                  icon={Activity}
+                  value={sepoliaSync.txHash}
+                  href={sepoliaSync.txHash ? `https://sepolia.etherscan.io/tx/${sepoliaSync.txHash}` : undefined}
+                  copyKey="sepoliaResolveTx"
+                  copied={copied}
+                  onCopy={copy}
+                />
+                <HashRow
+                  label="Flow resolve TX"
+                  icon={Activity}
+                  value={flowSync.txHash}
+                  href={flowSync.txHash ? `https://evm-testnet.flowscan.io/tx/${flowSync.txHash}` : undefined}
+                  copyKey="flowResolveTx"
+                  copied={copied}
+                  onCopy={copy}
+                />
+              </div>
+            )}
           </div>
 
           {/* ── Session Metadata ─────────────────────────────────────────────── */}

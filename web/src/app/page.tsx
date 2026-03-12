@@ -15,6 +15,7 @@ import {
   toFrontendMarket,
   isMarketDeployed,
 } from '@/lib/flow/market';
+import { isEammDeployed, readEammMarketMeta } from '@/lib/flow/eamm';
 
 // ─── Data loading ─────────────────────────────────────────────────────────────
 
@@ -30,7 +31,25 @@ function useMarkets() {
     }
     try {
       const raw = await readAllMarkets();
-      setOnChain(raw.map(toFrontendMarket));
+      // Home feed only shows markets that are open on Flow AND not finalized on Sepolia eAMM.
+      const flowOpen = raw.filter((m) => m.status === 0);
+      const crossChainOpen = isEammDeployed()
+        ? (await Promise.all(
+            flowOpen.map(async (m) => {
+              try {
+                const eammMeta = await readEammMarketMeta(m.id);
+                // eAMM status: 0 Active | 1 Resolved | 2 Cancelled
+                return eammMeta.status === 0;
+              } catch {
+                // If eAMM lookup fails (market not mirrored / rpc hiccup), keep market visible.
+                return true;
+              }
+            }),
+          ))
+        : flowOpen.map(() => true);
+
+      const openMarkets = flowOpen.filter((_, i) => crossChainOpen[i]);
+      setOnChain(openMarkets.map(toFrontendMarket).filter((m) => m.status === 'active'));
     } catch {
       // silently fall back to mock data
     } finally {
@@ -51,10 +70,10 @@ function useMarkets() {
    *    testnet when only a few on-chain markets exist.
    */
   const markets: Market[] = useMemo(() => {
-    if (!hydrated) return mockMarkets;
+    if (!hydrated) return mockMarkets.filter((m) => m.status === 'active');
 
     const onChainTitles = new Set(onChain.map((m) => m.title));
-    const filteredMock  = mockMarkets.filter((m) => !onChainTitles.has(m.title));
+    const filteredMock  = mockMarkets.filter((m) => m.status === 'active' && !onChainTitles.has(m.title));
 
     return [...onChain, ...filteredMock];
   }, [onChain, hydrated]);

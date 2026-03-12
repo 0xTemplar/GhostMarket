@@ -41,6 +41,14 @@ export interface ResolutionSession {
   finalEvidenceCid: string | null;   // Synapse Piece CID
   calibrationTxHash: string | null;
   flowTxHash: string | null;
+  sepoliaResolutionSync: {
+    status: 'idle' | 'pending' | 'synced' | 'failed' | 'skipped';
+    txHash: string | null;
+  };
+  flowResolutionSync: {
+    status: 'idle' | 'pending' | 'synced' | 'failed' | 'skipped';
+    txHash: string | null;
+  };
   startedAt: number;
   finalizedAt: number | null;
   log: LogEntry[];
@@ -63,6 +71,7 @@ export type WsMessageType =
   | 'quorum_reached'
   | 'finalized'
   | 'settlement_delivered'
+  | 'session_patch'
   | 'error';
 
 export interface WsMessage {

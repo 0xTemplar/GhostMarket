@@ -55,6 +55,14 @@ export interface OracleSession {
   finalEvidenceCid: string | null;
   calibrationTxHash: string | null;
   flowTxHash: string | null;
+  sepoliaResolutionSync: {
+    status: 'idle' | 'pending' | 'synced' | 'failed' | 'skipped';
+    txHash: string | null;
+  };
+  flowResolutionSync: {
+    status: 'idle' | 'pending' | 'synced' | 'failed' | 'skipped';
+    txHash: string | null;
+  };
   startedAt: number;
   finalizedAt: number | null;
   log: OracleLogEntry[];

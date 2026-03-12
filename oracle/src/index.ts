@@ -159,6 +159,15 @@ function updateAgent(session: ResolutionSession, agentId: number, patch: Partial
   });
 }
 
+function patchSession(session: ResolutionSession, patch: Partial<ResolutionSession>) {
+  Object.assign(session, patch);
+  broadcast(session.marketId, {
+    type: 'session_patch',
+    marketId: session.marketId,
+    payload: patch,
+  });
+}
+
 // ── Resolution engine ──────────────────────────────────────────────────────────
 
 async function runAgent(
@@ -335,12 +344,40 @@ async function finalizeResolution(session: ResolutionSession) {
 
   addLog(session, 'settlement relay ready — users can claim via /oracle/settle/:marketId');
 
-  // ── Background: resolve GhostEAMM on Sepolia so Lit Action can verify ─────────
-  // The Lit Action reads GhostEAMM.getMarketMeta() to confirm status === Resolved
-  // before signing the settlement claim.  We call resolveMarket() here using the
-  // deployer wallet (owner / resolver role).
+  // ── Background: canonical Sepolia resolve, then mirror status to Flow ──────────
+  patchSession(session, {
+    sepoliaResolutionSync: { status: 'pending', txHash: null },
+    flowResolutionSync: { status: 'pending', txHash: null },
+  });
+  addLog(session, 'starting cross-chain status sync (Sepolia canonical -> Flow mirror)');
 
-  void resolveGhostEammOnSepolia(session.marketId, outcome);
+  void (async () => {
+    const sepoliaSync = await resolveGhostEammOnSepolia(session.marketId, outcome);
+    patchSession(session, { sepoliaResolutionSync: sepoliaSync });
+
+    if (sepoliaSync.status === 'synced') {
+      addLog(session, 'Sepolia market status synced', { txHash: sepoliaSync.txHash ?? null });
+    } else if (sepoliaSync.status === 'skipped') {
+      addLog(session, 'Sepolia sync skipped (missing config)');
+    } else {
+      addLog(session, 'Sepolia sync failed', { txHash: sepoliaSync.txHash ?? null });
+      patchSession(session, {
+        flowResolutionSync: { status: 'skipped', txHash: null },
+      });
+      addLog(session, 'Flow mirror skipped because Sepolia canonical resolve did not sync');
+      return;
+    }
+
+    const flowSync = await resolveFlowMarketOnFlow(session.marketId, outcome);
+    patchSession(session, { flowResolutionSync: flowSync });
+    if (flowSync.status === 'synced') {
+      addLog(session, 'Flow market status mirrored', { txHash: flowSync.txHash ?? null });
+    } else if (flowSync.status === 'skipped') {
+      addLog(session, 'Flow mirror skipped (missing config)');
+    } else {
+      addLog(session, 'Flow mirror failed', { txHash: flowSync.txHash ?? null });
+    }
+  })();
 
   // ── Background: record evidence CID in OracleAgentRegistry ───────────────────
   // Serialised by enqueueWrite (Calibration nonce ordering) but non-blocking.
@@ -425,7 +462,10 @@ async function finalizeResolution(session: ResolutionSession) {
  * This sets status = Resolved (1) so the Lit Action can verify it before signing.
  * Runs in the background — does not block finalization.
  */
-async function resolveGhostEammOnSepolia(marketId: string, outcome: boolean): Promise<void> {
+async function resolveGhostEammOnSepolia(
+  marketId: string,
+  outcome: boolean,
+): Promise<{ status: 'synced' | 'failed' | 'skipped'; txHash: string | null }> {
   const sepoliaRpc  = process.env.SEPOLIA_RPC_URL              ?? 'https://rpc.sepolia.org';
   // Use EAMM_RESOLVER_PRIVATE_KEY (deployer/owner) — the oracle's SEPOLIA_PRIVATE_KEY
   // may not have the onlyResolverOrOwner role on GhostEAMM.
@@ -436,7 +476,7 @@ async function resolveGhostEammOnSepolia(marketId: string, outcome: boolean): Pr
 
   if (!sepoliaKey || !eammAddress) {
     console.warn('[EAMM] Skipping resolveMarket — SEPOLIA_PRIVATE_KEY or GHOST_EAMM_ADDRESS not set');
-    return;
+    return { status: 'skipped', txHash: null };
   }
 
   const EAMM_RESOLVE_ABI = [
@@ -453,7 +493,7 @@ async function resolveGhostEammOnSepolia(marketId: string, outcome: boolean): Pr
     const [currentStatus] = await eamm.getMarketMeta(BigInt(marketId)) as [number, boolean, bigint];
     if (Number(currentStatus) === 1) {
       console.log(`[EAMM] Market ${marketId} already Resolved on Sepolia — skipping`);
-      return;
+      return { status: 'synced', txHash: null };
     }
 
     console.log(`[EAMM] Resolving market ${marketId} on Sepolia (outcome=${outcome})…`);
@@ -462,8 +502,59 @@ async function resolveGhostEammOnSepolia(marketId: string, outcome: boolean): Pr
     const receipt = await tx.wait();
     console.log(`[EAMM] Market ${marketId} Resolved on Sepolia — block ${receipt.blockNumber}`);
     console.log(`[EAMM] Etherscan: https://sepolia.etherscan.io/tx/${tx.hash}`);
+    return { status: 'synced', txHash: tx.hash };
   } catch (err) {
     console.warn(`[EAMM] resolveMarket failed (non-fatal): ${(err as Error).message}`);
+    return { status: 'failed', txHash: null };
+  }
+}
+
+async function resolveFlowMarketOnFlow(
+  marketId: string,
+  outcome: boolean,
+): Promise<{ status: 'synced' | 'failed' | 'skipped'; txHash: string | null }> {
+  const flowRpc = process.env.FLOW_RPC_URL ?? 'https://testnet.evm.nodes.onflow.org';
+  const flowKey =
+    process.env.FLOW_MARKET_RESOLVER_PRIVATE_KEY ??
+    process.env.EAMM_RESOLVER_PRIVATE_KEY ??
+    process.env.SETTLEMENT_SIGNER_PRIVATE_KEY ??
+    '';
+  const marketAddress =
+    process.env.GHOST_MARKET_ADDRESS ??
+    process.env.NEXT_PUBLIC_GHOST_MARKET_ADDRESS ??
+    '';
+
+  if (!flowKey || !marketAddress) {
+    console.warn('[FlowMarket] Skipping resolveMarket — resolver key or GHOST_MARKET_ADDRESS not set');
+    return { status: 'skipped', txHash: null };
+  }
+
+  const FLOW_MARKET_ABI = [
+    'function resolveMarket(uint256 marketId, bool outcome) external',
+    'function markets(uint256 marketId) view returns (string,string,string,string,uint64,uint8,uint256,uint256,bool,address)',
+  ];
+
+  try {
+    const provider = new ethers.JsonRpcProvider(flowRpc);
+    const wallet = new ethers.Wallet(flowKey, provider);
+    const market = new ethers.Contract(marketAddress, FLOW_MARKET_ABI, wallet);
+
+    const raw = await market.markets(BigInt(marketId));
+    const status = Number(raw[5] ?? 0);
+    if (status === 1) {
+      console.log(`[FlowMarket] Market ${marketId} already Resolved on Flow — skipping`);
+      return { status: 'synced', txHash: null };
+    }
+
+    const tx = await market.resolveMarket(BigInt(marketId), outcome);
+    console.log(`[FlowMarket] resolveMarket TX: ${tx.hash}`);
+    const receipt = await tx.wait();
+    console.log(`[FlowMarket] Market ${marketId} Resolved on Flow — block ${receipt.blockNumber}`);
+    console.log(`[FlowMarket] Flowscan: https://evm-testnet.flowscan.io/tx/${tx.hash}`);
+    return { status: 'synced', txHash: tx.hash };
+  } catch (err) {
+    console.warn(`[FlowMarket] resolveMarket failed (non-fatal): ${(err as Error).message}`);
+    return { status: 'failed', txHash: null };
   }
 }
 
@@ -907,6 +998,8 @@ app.post('/oracle/resolve/:marketId', async (req, res) => {
     finalEvidenceCid: null,
     calibrationTxHash: null,
     flowTxHash:      null,
+    sepoliaResolutionSync: { status: 'idle', txHash: null },
+    flowResolutionSync: { status: 'idle', txHash: null },
     startedAt:       Date.now(),
     finalizedAt:     null,
     log:             [],
