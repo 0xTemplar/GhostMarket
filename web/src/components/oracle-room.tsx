@@ -53,7 +53,7 @@ type WsMessage =
   | {
       type: 'settlement_delivered';
       marketId: string;
-      payload: { userAddress?: string; txHash?: string; payout?: string };
+      payload: { userAddress?: string; txHash?: string; payout?: string; isWinner?: boolean };
     }
   | { type: 'error'; marketId: string; payload: unknown };
 
@@ -547,6 +547,9 @@ function HashRow({
 export function OracleRoom() {
   const [marketId, setMarketId] = useState('6');
   const [session, setSession] = useState<OracleSession | null>(null);
+  const [lastSettlement, setLastSettlement] = useState<{
+    payout: string; isWinner: boolean; txHash: string | null;
+  } | null>(null);
   const [loadingSession, setLoadingSession] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
@@ -676,7 +679,17 @@ export function OracleRoom() {
             case 'settlement_delivered': {
               const settlementPayload = msg.payload as unknown as {
                 txHash?: string | null;
+                payout?: string | null;
+                isWinner?: boolean;
               };
+              // Surface payout info outside session so we can render it
+              if (settlementPayload.payout !== undefined) {
+                setLastSettlement({
+                  payout:   settlementPayload.payout ?? '0',
+                  isWinner: settlementPayload.isWinner ?? false,
+                  txHash:   settlementPayload.txHash ?? null,
+                });
+              }
               return {
                 ...prev,
                 flowTxHash: settlementPayload.txHash ?? prev.flowTxHash,
@@ -1178,19 +1191,45 @@ export function OracleRoom() {
                   </div>
                 </div>
               )}
-              <HashRow
-                label="Flow Settlement TX"
-                icon={Zap}
-                value={session?.flowTxHash}
-                href={
-                  session?.flowTxHash
-                    ? `https://evm-testnet.flowscan.io/tx/${session.flowTxHash}`
-                    : undefined
-                }
-                copyKey="flowTx"
-                copied={copied}
-                onCopy={copy}
-              />
+              <div className="space-y-1.5">
+                <HashRow
+                  label="Vault Credit TX"
+                  icon={Zap}
+                  value={session?.flowTxHash}
+                  href={
+                    session?.flowTxHash
+                      ? `https://evm-testnet.flowscan.io/tx/${session.flowTxHash}`
+                      : undefined
+                  }
+                  copyKey="flowTx"
+                  copied={copied}
+                  onCopy={copy}
+                />
+                {session?.flowTxHash && (
+                  <div className="rounded-lg border border-white/6 bg-slate-950/60 px-3 py-2">
+                    <p className="font-mono text-[10px] text-slate-500 leading-relaxed">
+                      This tx updates vault accounting (no FLOW transfer occurs on-chain).
+                      Payout is credited to the user&apos;s vault balance.
+                    </p>
+                    {lastSettlement && (
+                      <div className={cn(
+                        'mt-1.5 flex items-center gap-2 font-mono text-[11px]',
+                        lastSettlement.isWinner ? 'text-emerald-300' : 'text-rose-300',
+                      )}>
+                        <span className={cn(
+                          'h-1.5 w-1.5 rounded-full shrink-0',
+                          lastSettlement.isWinner ? 'bg-emerald-400' : 'bg-rose-400',
+                        )} />
+                        {lastSettlement.isWinner
+                          ? `+${Number(lastSettlement.payout) > 0
+                              ? (Number(lastSettlement.payout) / 1e18).toFixed(4)
+                              : '0'} FLOW credited`
+                          : 'lock released (losing position)'}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 

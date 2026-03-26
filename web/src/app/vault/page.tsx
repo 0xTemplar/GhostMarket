@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -10,15 +10,19 @@ import {
   Loader2,
   ShieldCheck,
   ExternalLink,
+  X,
 } from 'lucide-react';
 import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
 import {
   readVaultBalance,
+  readFreeBalance,
   GHOST_VAULT_ADDRESS,
   GHOST_VAULT_ABI,
   publicClient,
   parseEther,
 } from '@/lib/flow/vault';
+
+const BALANCE_STORAGE_KEY = 'ghost:vault:lastFreeBalance';
 
 type TxStatus = 'idle' | 'pending' | 'success' | 'error';
 
@@ -33,20 +37,44 @@ const NOT_DEPLOYED = GHOST_VAULT_ADDRESS === '0x00000000000000000000000000000000
 export default function VaultPage() {
   const { user, login, setupCoa, isLoading } = useFlowAuth();
   const walletClient = useFlowWalletClient();
-  const [balance, setBalance] = useState<string | null>(null);
+  const [balance, setBalance]   = useState<string | null>(null);
+  const [freeBalance, setFreeBalance] = useState<string | null>(null);
   const [depositAmount, setDepositAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [depositTx, setDepositTx] = useState<TxState>({ status: 'idle' });
   const [withdrawTx, setWithdrawTx] = useState<TxState>({ status: 'idle' });
+  const [settlementBanner, setSettlementBanner] = useState<{
+    delta: number;
+  } | null>(null);
+  const prevFreeBalanceRef = useRef<string | null>(null);
 
   const fetchBalance = useCallback(async () => {
     if (!user.evmAddress) return;
-    const b = await readVaultBalance(user.evmAddress as `0x${string}`);
-    setBalance(b);
+    const addr = user.evmAddress as `0x${string}`;
+    const [total, free] = await Promise.all([
+      readVaultBalance(addr),
+      readFreeBalance(addr),
+    ]);
+    setBalance(total);
+    setFreeBalance(free);
+
+    // Settlement notification: detect if free balance increased vs stored value
+    const stored = prevFreeBalanceRef.current ?? localStorage.getItem(BALANCE_STORAGE_KEY);
+    if (stored !== null && free !== null) {
+      const delta = parseFloat(free) - parseFloat(stored);
+      if (delta > 0.0001) {
+        setSettlementBanner({ delta });
+      }
+    }
+    prevFreeBalanceRef.current = free;
+    if (free) localStorage.setItem(BALANCE_STORAGE_KEY, free);
   }, [user.evmAddress]);
 
+  // Initial load + poll every 30s so settled payouts surface automatically
   useEffect(() => {
     fetchBalance();
+    const interval = setInterval(fetchBalance, 30_000);
+    return () => clearInterval(interval);
   }, [fetchBalance]);
 
   async function handleDeposit() {
@@ -179,19 +207,51 @@ export default function VaultPage() {
         </div>
       )}
 
+      {/* Settlement notification banner */}
+      {settlementBanner && (
+        <div className="flex items-center gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" strokeWidth={1.5} />
+          <p className="flex-1 text-sm text-emerald-300">
+            <span className="font-semibold font-mono">
+              +{settlementBanner.delta.toFixed(4)} FLOW
+            </span>{' '}
+            credited to your vault from market settlement.
+          </p>
+          <button
+            onClick={() => setSettlementBanner(null)}
+            className="text-emerald-600 hover:text-emerald-400 transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Balance card */}
       <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-6">
-        <p className="text-xs text-slate-500 uppercase tracking-widest mb-1">Vault balance</p>
+        <p className="text-xs text-slate-500 uppercase tracking-widest mb-1">Available balance</p>
         <div className="flex items-end gap-3">
           <span className="text-4xl font-bold text-white tabular-nums">
-            {balance === null ? (
+            {freeBalance === null ? (
               <Loader2 className="w-8 h-8 animate-spin text-slate-600 inline" />
             ) : (
-              Number(balance).toFixed(4)
+              Number(freeBalance).toFixed(4)
             )}
           </span>
           <span className="text-slate-400 mb-1 text-lg">FLOW</span>
         </div>
+
+        {/* Locked collateral footnote */}
+        {balance !== null && freeBalance !== null && Number(balance) - Number(freeBalance) > 0 && (
+          <div className="mt-3 flex items-center gap-2 rounded-lg border border-amber-500/15 bg-amber-500/5 px-3 py-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
+            <span className="text-xs text-amber-300/80">
+              <span className="font-mono font-semibold text-amber-300">
+                {(Number(balance) - Number(freeBalance)).toFixed(4)} FLOW
+              </span>
+              {' '}locked as collateral for active bets
+            </span>
+          </div>
+        )}
 
         <div className="mt-4 flex flex-wrap gap-3 text-xs text-slate-500">
           <span className="flex items-center gap-1.5">

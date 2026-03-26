@@ -20,7 +20,7 @@ import {
   isEammDeployed,
   GHOST_EAMM_ADDRESS,
 } from '@/lib/flow/eamm';
-import { lockBetCollateral, readLockedAmount } from '@/lib/flow/vault';
+import { lockBetCollateral, readLockedAmount, readFreeBalance, depositToVault } from '@/lib/flow/vault';
 
 interface BetSlipProps {
   market: Market;
@@ -31,6 +31,7 @@ interface BetSlipProps {
 
 type TxState =
   | { phase: 'idle' }
+  | { phase: 'depositing' }                    // depositing FLOW into vault (auto, if balance low)
   | { phase: 'locking' }                       // locking collateral on Flow EVM
   | { phase: 'encrypting' }                    // encrypting amount with fhevmjs
   | { phase: 'signing' }                       // awaiting wallet sig for placeBet
@@ -98,10 +99,10 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
   const handleShieldedSubmit = async () => {
     const amountWei = toWei(amount);
 
-    // ── Layer 1: lock collateral on Flow EVM ──────────────────────────────────
-    // Skip if a lock already exists (e.g. a previous attempt locked successfully
-    // but the Sepolia step failed — the user is retrying the same market).
-    setTxState({ phase: 'locking' });
+    // ── Layer 1: ensure vault balance, then lock collateral on Flow EVM ─────────
+    // Step A: auto-deposit if the user's free vault balance < bet amount.
+    // Step B: lock the collateral so it can't be withdrawn before settlement.
+    // Skip if a lock already exists (retry path — previous attempt locked but Sepolia failed).
     try {
       if (!walletClient) throw new Error('Flow EVM wallet not ready. Please wait and try again.');
 
@@ -113,10 +114,25 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
         : '0';
 
       if (parseFloat(alreadyLocked) === 0) {
-        const lockHash = await lockBetCollateral(walletClient, Number(market.id), amountWei);
+        // ── Step A: deposit if vault free balance is insufficient ──────────────
+        const freeBalance = userAddress ? await readFreeBalance(userAddress) : '0';
+        const freeWei = BigInt(Math.floor(parseFloat(freeBalance) * 1e18));
+
+        if (freeWei < amountWei) {
+          const shortfall = amountWei - freeWei;
+          setTxState({ phase: 'depositing' });
+          const depositHash = await depositToVault(walletClient, shortfall);
+          await flowPublicClient.waitForTransactionReceipt({ hash: depositHash });
+        }
+
+        // ── Step B: lock the (now-funded) collateral ───────────────────────────
+        setTxState({ phase: 'locking' });
+        const lockHash = await lockBetCollateral(walletClient, Number(market.id), amountWei, side === 'YES');
         await flowPublicClient.waitForTransactionReceipt({ hash: lockHash });
+      } else {
+        setTxState({ phase: 'locking' });
+        // If already locked: skip both steps and proceed to the Sepolia step.
       }
-      // If already locked: skip the tx and proceed to the Sepolia step.
     } catch (err: unknown) {
       let message = 'Collateral lock failed.';
       if (err instanceof Error) {
@@ -128,13 +144,11 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
           raw.includes('InsufficientBalance') ||
           raw.includes('0xcf479181')
         ) {
-          message = 'Insufficient free vault balance to lock this bet amount. Deposit more FLOW in Vault or lower the stake.';
+          message = 'Insufficient FLOW in wallet. Add testnet FLOW from the faucet at faucet.flow.com.';
         } else if (
           raw.includes('BetAlreadyLocked') ||
           raw.includes('0xac396183')
         ) {
-          // Race-safe fallback: if lock was already created in a prior attempt,
-          // continue to encrypted Sepolia bet flow on next submit.
           message = 'Collateral is already locked for this market. You can submit the shielded bet now.';
         } else if (lower.includes('zeroamount') || raw.includes('0x1f2a2005')) {
           message = 'Bet amount must be greater than zero.';
@@ -241,7 +255,7 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
   };
 
   const quickAmounts = [1, 5, 10, 25];
-  const isBusy   = txState.phase === 'locking' || txState.phase === 'encrypting' || txState.phase === 'signing' || txState.phase === 'pending';
+  const isBusy   = txState.phase === 'depositing' || txState.phase === 'locking' || txState.phase === 'encrypting' || txState.phase === 'signing' || txState.phase === 'pending';
   const currency = onChain ? 'FLOW' : '$';
   const scanBase = txState.phase === 'success' && txState.shielded ? SEPOLIASCAN_BASE : FLOWSCAN_BASE;
 
@@ -527,11 +541,21 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                       <Shield className="h-4 w-4 text-indigo-400 mt-0.5 shrink-0" />
                       <p className="text-xs text-indigo-300 leading-relaxed">
                         {onChain && shieldedMode && isEammDeployed()
-                          ? 'Two-step: stake is locked on Flow EVM as collateral, then amount is encrypted with FHE before submission. Position size is invisible to all other market participants.'
+                          ? 'Three-step: FLOW is deposited to vault (if needed), collateral is locked on Flow EVM, then amount is encrypted with FHE before submission. Position size is invisible to all other market participants.'
                           : onChain
                           ? 'Executing on Flow EVM (public). Enable Shielded mode to lock collateral and hide your bet size.'
                           : 'Shielded by default — order size and intent are encrypted before execution.'}
                       </p>
+                    </div>
+                  )}
+
+                  {/* Depositing FLOW notice */}
+                  {txState.phase === 'depositing' && (
+                    <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-3">
+                      <Loader2 className="h-4 w-4 text-emerald-400 animate-spin shrink-0" />
+                      <span className="text-xs text-emerald-300">
+                        Depositing FLOW into vault…
+                      </span>
                     </div>
                   )}
 
@@ -570,7 +594,12 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                       disabled={!isValid || isBusy}
                       className="w-full h-12 rounded-lg bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold flex items-center justify-center gap-2 transition-colors"
                     >
-                      {txState.phase === 'locking' ? (
+                      {txState.phase === 'depositing' ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Depositing to vault…
+                        </>
+                      ) : txState.phase === 'locking' ? (
                         <>
                           <Loader2 className="h-4 w-4 animate-spin" />
                           Locking collateral…

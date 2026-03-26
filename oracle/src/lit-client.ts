@@ -72,16 +72,16 @@ export interface SettlementSignOutput {
 
 // ── ABI fragments for on-chain reads ─────────────────────────────────────────
 
+// Minimal EAMM ABI — outcome confirmation only (pool reads replaced by GhostVault)
 const EAMM_ABI = [
   'function getMarketMeta(uint256 marketId) external view returns (uint8 status, bool outcome, uint64 expiryAt)',
-  'function hasPosition(uint256 marketId, address user) external view returns (bool)',
-  'event BetPlaced(uint256 indexed marketId, address indexed user, bool indexed side)',
-  'function totalYesStake(uint256 marketId) external view returns (uint256)',
-  'function totalNoStake(uint256 marketId) external view returns (uint256)',
 ];
 
+// Vault ABI — settlement reads only
 const VAULT_ABI = [
   'function lockedAmounts(address user, bytes32 marketId) external view returns (uint256)',
+  'function isResolved(bytes32 marketId) external view returns (bool)',
+  'function computeExpectedPayout(address user, bytes32 marketId) external view returns (uint256)',
   'function settlementSigner() external view returns (address)',
 ];
 
@@ -139,198 +139,55 @@ export async function buildSettlementSignature(
   });
 }
 
-// How many blocks back to search for BetPlaced events.
-// Default covers ~69 days on Sepolia (12 s/block × 500 000 = 69.4 days).
-// Override with MARKET_LOOKBACK_BLOCKS in oracle/.env if markets are older.
-const MARKET_LOOKBACK_BLOCKS = Number(process.env.MARKET_LOOKBACK_BLOCKS ?? '500000');
-// Maximum block span per eth_getLogs request.
-// Keep 10 for Alchemy free tier compatibility.
-const BET_LOG_SCAN_CHUNK_SIZE = Math.max(1, Number(process.env.BET_LOG_SCAN_CHUNK_SIZE ?? '10'));
-const BET_PLACED_TOPIC = ethers.id('BetPlaced(uint256,address,bool)');
+// ── On-chain reads (Option B — GhostVault is the single source of truth) ───────
 
 /**
- * Resolve the `fromBlock` (hex string) for the BetPlaced eth_getLogs query.
+ * Read settlement data from GhostVault on Flow EVM.
  *
- * Strategy (in priority order):
- *  1. If `betTxHash` is provided → fetch its receipt and return that exact block.
- *     Result is a 1-block window — works on Alchemy free tier or any plan.
- *  2. Otherwise → return currentBlock - MARKET_LOOKBACK_BLOCKS.
- *     Requires an Alchemy plan that supports the range (PAYG+).
+ * Option B simplification: the vault contract already computes the exact payout
+ * via computeExpectedPayout() once the oracle has called reportOutcome() with
+ * the final pool snapshot. We delegate all payout math to the contract and just
+ * sign the on-chain result — no off-chain pool replication needed.
  *
- * Never returns genesis/0x0 — querying the full chain history is always wrong.
+ * If GhostVault has not yet been updated (race condition: vault-reporter still
+ * in-flight), we throw so the settlement sweep retries later.
  */
-async function getLogsFromBlock(betTxHash?: string): Promise<{ fromBlock: string; toBlock: string }> {
-  const provider = new ethers.JsonRpcProvider(SEPOLIA_RPC_URL);
-  // #region agent log
-  fetch('http://127.0.0.1:7884/ingest/fbd2257e-f2ff-467e-b558-4abfac1502be',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37e9d3'},body:JSON.stringify({sessionId:'37e9d3',runId:'logs-range',hypothesisId:'H3-H4',location:'lit-client.ts:getLogsFromBlock-entry',message:'Computing bet log block range',data:{hasBetTxHash:Boolean(betTxHash),betTxHashPrefix:betTxHash?.slice(0,18) ?? null,rpcUrlHost:(() => { try { return new URL(SEPOLIA_RPC_URL).host; } catch { return 'invalid-url'; } })(),lookbackBlocks:MARKET_LOOKBACK_BLOCKS},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
-
-  if (betTxHash) {
-    const receipt = await provider.getTransactionReceipt(betTxHash);
-    if (!receipt) {
-      // #region agent log
-      fetch('http://127.0.0.1:7884/ingest/fbd2257e-f2ff-467e-b558-4abfac1502be',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37e9d3'},body:JSON.stringify({sessionId:'37e9d3',runId:'logs-range',hypothesisId:'H4',location:'lit-client.ts:getLogsFromBlock-missing-receipt',message:'betTxHash receipt not found',data:{betTxHashPrefix:betTxHash.slice(0,18)},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
-      throw new Error(`Could not find receipt for betTxHash ${betTxHash}`);
-    }
-    const hex = '0x' + receipt.blockNumber.toString(16);
-    console.log(`[Lit] Bet tx resolved to Sepolia block ${receipt.blockNumber} — using exact 1-block range`);
-    // #region agent log
-    fetch('http://127.0.0.1:7884/ingest/fbd2257e-f2ff-467e-b558-4abfac1502be',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37e9d3'},body:JSON.stringify({sessionId:'37e9d3',runId:'logs-range',hypothesisId:'H4',location:'lit-client.ts:getLogsFromBlock-exact',message:'Using exact bet block range',data:{fromBlock:hex,toBlock:hex,blockNumber:receipt.blockNumber},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
-    return { fromBlock: hex, toBlock: hex };
-  }
-
-  const currentBlock = await provider.getBlockNumber();
-  const fromBlock    = Math.max(0, currentBlock - MARKET_LOOKBACK_BLOCKS);
-  const hex          = '0x' + fromBlock.toString(16);
-  console.log(`[Lit] No betTxHash — using lookback range: ${hex} → latest (~${MARKET_LOOKBACK_BLOCKS} blocks)`);
-  // #region agent log
-  fetch('http://127.0.0.1:7884/ingest/fbd2257e-f2ff-467e-b558-4abfac1502be',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37e9d3'},body:JSON.stringify({sessionId:'37e9d3',runId:'logs-range',hypothesisId:'H3',location:'lit-client.ts:getLogsFromBlock-lookback',message:'Using lookback log range',data:{fromBlock:hex,toBlock:'latest',currentBlock,lookbackBlocks:MARKET_LOOKBACK_BLOCKS},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
-  return { fromBlock: hex, toBlock: 'latest' };
-}
-
-function marketTopic(marketIdUint: string): string {
-  return ethers.zeroPadValue(ethers.toBeHex(BigInt(marketIdUint)), 32);
-}
-
-function addressTopic(userAddress: string): string {
-  return ethers.zeroPadValue(userAddress, 32);
-}
-
-async function getBetPlacedLogs(
-  provider: ethers.JsonRpcProvider,
-  marketIdUint: string,
-  userAddress: string,
-  fromBlock: number,
-  toBlock: number,
-): Promise<ethers.Log[]> {
-  return provider.getLogs({
-    address: GHOST_EAMM_ADDRESS,
-    topics: [BET_PLACED_TOPIC, marketTopic(marketIdUint), addressTopic(userAddress)],
-    fromBlock,
-    toBlock,
-  });
-}
-
-async function findLatestBetPlacedLog(
-  provider: ethers.JsonRpcProvider,
-  marketIdUint: string,
-  userAddress: string,
-  betTxHash?: string,
-): Promise<ethers.Log> {
-  if (betTxHash) {
-    const receipt = await provider.getTransactionReceipt(betTxHash);
-    if (!receipt) throw new Error(`Could not find receipt for betTxHash ${betTxHash}`);
-
-    const exactBlockLogs = await getBetPlacedLogs(
-      provider,
-      marketIdUint,
-      userAddress,
-      receipt.blockNumber,
-      receipt.blockNumber,
-    );
-
-    const exactTxLog = exactBlockLogs.find(
-      (log) => log.transactionHash.toLowerCase() === betTxHash.toLowerCase(),
-    );
-    if (exactTxLog) return exactTxLog;
-
-    if (exactBlockLogs.length > 0) return exactBlockLogs[exactBlockLogs.length - 1];
-    throw new Error(`No BetPlaced log found at betTxHash block ${receipt.blockNumber}`);
-  }
-
-  const latest = await provider.getBlockNumber();
-  const oldest = Math.max(0, latest - MARKET_LOOKBACK_BLOCKS);
-
-  for (let to = latest; to >= oldest; to -= BET_LOG_SCAN_CHUNK_SIZE) {
-    const from = Math.max(oldest, to - BET_LOG_SCAN_CHUNK_SIZE + 1);
-    const logs = await getBetPlacedLogs(provider, marketIdUint, userAddress, from, to);
-    if (logs.length > 0) {
-      return logs[logs.length - 1];
-    }
-  }
-
-  throw new Error(
-    `No bet found for user ${userAddress} in market ${marketIdUint} within last ${MARKET_LOOKBACK_BLOCKS} blocks`,
-  );
-}
-
-// ── On-chain reads ─────────────────────────────────────────────────────────────
-
-async function readOnChainSettlementData(input: SettlementSignInput) {
-  const sepoliaProvider = new ethers.JsonRpcProvider(SEPOLIA_RPC_URL);
-  const flowProvider    = new ethers.JsonRpcProvider(FLOW_RPC_URL);
-
-  const eamm  = new ethers.Contract(GHOST_EAMM_ADDRESS, EAMM_ABI, sepoliaProvider);
+async function readOnChainSettlementData(
+  input: SettlementSignInput,
+): Promise<{ payout: bigint; lockedAmount: bigint }> {
+  const flowProvider = new ethers.JsonRpcProvider(FLOW_RPC_URL);
   const vault = new ethers.Contract(GHOST_VAULT_ADDRESS, VAULT_ABI, flowProvider);
 
-  // Market outcome
-  const [status, outcome] = await eamm.getMarketMeta(BigInt(input.marketIdUint));
-  if (Number(status) !== 1) {
-    throw new Error(`Market ${input.marketIdUint} is not resolved (status: ${status})`);
-  }
+  // Guard: vault must have a reported outcome before we can compute payouts.
+  const vaultResolved: boolean = await vault.isResolved(input.marketIdBytes32).catch(() => false);
 
-  // User's bet side — read from BetPlaced logs.
-  // Strategy:
-  // - betTxHash provided: exact 1-block query + tx-hash match
-  // - no betTxHash: backward chunk scan in <=10-block windows (Alchemy free-tier safe)
-  const latestLog = await findLatestBetPlacedLog(
-    sepoliaProvider,
-    input.marketIdUint,
-    input.userAddress,
-    input.betTxHash,
-  );
-  const userSide = parseInt(latestLog.topics[3] ?? '0x0', 16) === 1;
-  if (!input.betTxHash) {
-    console.log(
-      `[Settlement] Auto-discovered betTxHash: ${latestLog.transactionHash} (block ${latestLog.blockNumber})`,
+  if (!vaultResolved) {
+    // Confirm the EAMM is resolved (so we know the oracle quorum fired correctly).
+    const sepoliaProvider = new ethers.JsonRpcProvider(SEPOLIA_RPC_URL);
+    const eamm = new ethers.Contract(GHOST_EAMM_ADDRESS, EAMM_ABI, sepoliaProvider);
+    const [status] = await eamm.getMarketMeta(BigInt(input.marketIdUint)).catch(() => [0]);
+    if (Number(status) !== 1) {
+      throw new Error(`Market ${input.marketIdUint} not resolved on Sepolia EAMM (status: ${status})`);
+    }
+    // EAMM is resolved but vault hasn't been updated yet — vault-reporter is still in-flight.
+    throw new Error(
+      `GhostVault outcome not yet reported for market ${input.marketIdUint}. ` +
+      'vault-reporter may still be confirming — retry in a few seconds.',
     );
   }
 
-  // Locked collateral from GhostVault.
-  // Some Flow EVM nodes may return an execution error for missing entries;
-  // treat that as zero locked so settlement signing remains available.
-  let lockedAmount = 0n;
-  try {
-    lockedAmount = await vault.lockedAmounts(input.userAddress, input.marketIdBytes32);
-  } catch {
-    console.warn('[Settlement] lockedAmounts read failed — treating as 0 locked');
-  }
+  // Delegate payout math to the contract. The vault holds the final pool snapshot
+  // committed atomically at reportOutcome time, so this result is canonical.
+  const [payout, lockedAmount] = await Promise.all([
+    vault.computeExpectedPayout(input.userAddress, input.marketIdBytes32) as Promise<bigint>,
+    vault.lockedAmounts(input.userAddress, input.marketIdBytes32) as Promise<bigint>,
+  ]);
 
-  // Pool totals from GhostEAMM (public mappings)
-  let totalYesPool = 0n;
-  let totalNoPool  = 0n;
-  try {
-    totalYesPool = await eamm.totalYesStake(BigInt(input.marketIdUint));
-    totalNoPool  = await eamm.totalNoStake(BigInt(input.marketIdUint));
-  } catch {
-    console.warn('[Settlement] totalYesStake/totalNoStake not available — using 1:1 payout');
-    totalYesPool = lockedAmount;
-    totalNoPool  = lockedAmount;
-  }
-
-  return { outcome, userSide, lockedAmount, totalYesPool, totalNoPool };
-}
-
-// ── Payout computation ─────────────────────────────────────────────────────────
-
-function computePayout(
-  outcome:      boolean,
-  userSide:     boolean,
-  lockedAmount: bigint,
-  totalYesPool: bigint,
-  totalNoPool:  bigint,
-): bigint {
-  const userWon    = userSide === outcome;
-  if (!userWon) return 0n;
-
-  const winnerPool = outcome ? totalYesPool : totalNoPool;
-  const loserPool  = outcome ? totalNoPool  : totalYesPool;
-
-  if (winnerPool === 0n) return lockedAmount;
-  return lockedAmount + (lockedAmount * loserPool / winnerPool);
+  console.log(
+    `[Settlement] on-chain payout: ${payout.toString()} wei, ` +
+    `locked: ${lockedAmount.toString()} wei`,
+  );
+  return { payout, lockedAmount };
 }
 
 // ── Lit Protocol V1 (Naga) path ────────────────────────────────────────────────
@@ -381,10 +238,8 @@ async function signViaLitAction(input: SettlementSignInput): Promise<SettlementS
 
   console.log('[Lit] Auth context created — preparing settlement payload…');
 
-  // Compute settlement data in Node to keep Lit Action deterministic and sign-only.
-  const { outcome, userSide, lockedAmount, totalYesPool, totalNoPool } =
-    await readOnChainSettlementData(input);
-  const payout = computePayout(outcome, userSide, lockedAmount, totalYesPool, totalNoPool);
+  // Payout is computed on-chain by computeExpectedPayout — we just read and sign it.
+  const { payout } = await readOnChainSettlementData(input);
 
   // Must exactly match GhostVault EIP-712 domain + CLAIM_TYPEHASH.
   const flowProvider = new ethers.JsonRpcProvider(FLOW_RPC_URL);
@@ -531,10 +386,7 @@ async function signViaDeployerKey(input: SettlementSignInput): Promise<Settlemen
 
   const signer = new ethers.Wallet(SETTLEMENT_SIGNER_KEY);
 
-  const { outcome, userSide, lockedAmount, totalYesPool, totalNoPool } =
-    await readOnChainSettlementData(input);
-
-  const payout = computePayout(outcome, userSide, lockedAmount, totalYesPool, totalNoPool);
+  const { payout } = await readOnChainSettlementData(input);
 
   const sig = await buildSettlementSignature(
     signer,

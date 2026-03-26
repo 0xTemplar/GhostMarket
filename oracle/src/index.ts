@@ -34,39 +34,67 @@ import dotenv from 'dotenv';
 import { ethers } from 'ethers';
 
 import { buildAgents, agentDelay, AGENT_DEFINITIONS } from './agents';
-import { uploadToFilecoin }                            from './synapse-client';
+import { uploadToFilecoin } from './synapse-client';
 import {
-  saveIntermediateEvidence, saveAgentCheckpoint,
-  loadAllCheckpoints, readPeerEvidence, getAllHeads,
+  saveIntermediateEvidence,
+  saveAgentCheckpoint,
+  loadAllCheckpoints,
+  readPeerEvidence,
+  getAllHeads,
 } from './storacha-client';
-import { submitAttestation, recordEvidence, getAgentInfo, getAgentCount } from './registry-client';
-import { postERC8004Reputation }                       from './erc8004-client';
 import {
-  markMarketFinalized, getOrComputeSettlement, deliverSettlementOnChain,
-  getMarketSettlements, registerCanonicalBetTxHash, getCanonicalBetTxHash, listMarketParticipants,
+  submitAttestation,
+  recordEvidence,
+  getAgentInfo,
+  getAgentCount,
+} from './registry-client';
+import { postERC8004Reputation } from './erc8004-client';
+import {
+  markMarketFinalized,
+  getOrComputeSettlement,
+  deliverSettlementOnChain,
+  getMarketSettlements,
+  registerCanonicalBetTxHash,
+  getCanonicalBetTxHash,
+  listMarketParticipants,
 } from './settlement';
+import { reportOutcomeToVault } from './vault-reporter';
 import type {
-  ResolutionSession, OracleAgent, LogEntry, WsMessage, AgentStatus, SettlementClaimResponse,
+  ResolutionSession,
+  OracleAgent,
+  LogEntry,
+  WsMessage,
+  AgentStatus,
+  SettlementClaimResponse,
 } from './types';
 
 dotenv.config();
 
 // ── App setup ──────────────────────────────────────────────────────────────────
 
-const app    = express();
+const app = express();
 const server = createServer(app);
-const wss    = new WebSocketServer({ server });
-const PORT   = Number(process.env.PORT ?? 8080);
+const wss = new WebSocketServer({ server });
+const PORT = Number(process.env.PORT ?? 8080);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? '';
-const ORACLE_REASONING_MODEL = process.env.ORACLE_REASONING_MODEL ?? 'gpt-4o-mini';
-const ORACLE_REASONING_TIMEOUT_MS = Number(process.env.ORACLE_REASONING_TIMEOUT_MS ?? 9000);
-const ACTIVE_AGENT_COUNT = Math.max(1, Math.min(
-  AGENT_DEFINITIONS.length,
-  Number(process.env.ACTIVE_ORACLE_AGENTS ?? 4),
-));
+const ORACLE_REASONING_MODEL =
+  process.env.ORACLE_REASONING_MODEL ?? 'gpt-4o-mini';
+const ORACLE_REASONING_TIMEOUT_MS = Number(
+  process.env.ORACLE_REASONING_TIMEOUT_MS ?? 9000,
+);
+const ACTIVE_AGENT_COUNT = Math.max(
+  1,
+  Math.min(
+    AGENT_DEFINITIONS.length,
+    Number(process.env.ACTIVE_ORACLE_AGENTS ?? 4),
+  ),
+);
 const ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY =
-  (process.env.ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY ?? 'false').toLowerCase() === 'true';
-const quorumThreshold = (agentCount: number): number => Math.floor(agentCount / 2) + 1;
+  (
+    process.env.ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY ?? 'false'
+  ).toLowerCase() === 'true';
+const quorumThreshold = (agentCount: number): number =>
+  Math.floor(agentCount / 2) + 1;
 
 app.use(cors());
 app.use(express.json());
@@ -79,36 +107,41 @@ const sessions = new Map<string, ResolutionSession>();
 const subscribers = new Map<string, Set<WebSocket>>();
 
 // Agent reputation restored from Storacha checkpoints on startup
-const agentReputation = new Map<number, number>();   // agentId → score
-const agentLastMarket = new Map<number, string | number>();   // agentId → last resolved market
+const agentReputation = new Map<number, number>(); // agentId → score
+const agentLastMarket = new Map<number, string | number>(); // agentId → last resolved market
 
 // Load checkpoints asynchronously — non-blocking, results available within a few seconds
-loadAllCheckpoints().then(checkpoints => {
-  let resumed = 0;
-  for (const [idStr, cp] of Object.entries(checkpoints)) {
-    if (cp) {
-      const id = Number(idStr);
-      agentReputation.set(id, cp.reputationScore);
-      agentLastMarket.set(id, cp.lastMarket);
-      resumed++;
+loadAllCheckpoints()
+  .then((checkpoints) => {
+    let resumed = 0;
+    for (const [idStr, cp] of Object.entries(checkpoints)) {
+      if (cp) {
+        const id = Number(idStr);
+        agentReputation.set(id, cp.reputationScore);
+        agentLastMarket.set(id, cp.lastMarket);
+        resumed++;
+      }
     }
-  }
-  if (resumed > 0) {
-    console.log(`[Storacha] Resumed ${resumed}/7 agents from checkpoint`);
-  } else {
-    console.log(`[Storacha] No checkpoints found — agents starting fresh`);
-  }
-}).catch(() => {
-  console.log('[Storacha] Checkpoint load skipped (not configured)');
-});
+    if (resumed > 0) {
+      console.log(`[Storacha] Resumed ${resumed}/7 agents from checkpoint`);
+    } else {
+      console.log(`[Storacha] No checkpoints found — agents starting fresh`);
+    }
+  })
+  .catch(() => {
+    console.log('[Storacha] Checkpoint load skipped (not configured)');
+  });
 
 // ── WebSocket ──────────────────────────────────────────────────────────────────
 
 wss.on('connection', (ws, req) => {
-  const match    = req.url?.match(/\/oracle\/ws\/([^/?]+)/);
+  const match = req.url?.match(/\/oracle\/ws\/([^/?]+)/);
   const marketId = match ? match[1] : null;
 
-  if (!marketId) { ws.close(); return; }
+  if (!marketId) {
+    ws.close();
+    return;
+  }
 
   if (!subscribers.has(marketId)) subscribers.set(marketId, new Set());
   subscribers.get(marketId)!.add(ws);
@@ -137,34 +170,49 @@ function send(ws: WebSocket, msg: WsMessage) {
 
 // ── Session helpers ────────────────────────────────────────────────────────────
 
-function addLog(session: ResolutionSession, message: string, opts: {
-  agentName?: string | null;
-  txHash?: string | null;
-  cid?: string | null;
-} = {}) {
+function addLog(
+  session: ResolutionSession,
+  message: string,
+  opts: {
+    agentName?: string | null;
+    txHash?: string | null;
+    cid?: string | null;
+  } = {},
+) {
   const entry: LogEntry = {
-    ts:        Date.now(),
+    ts: Date.now(),
     agentName: opts.agentName ?? null,
     message,
-    txHash:    opts.txHash ?? null,
-    cid:       opts.cid ?? null,
+    txHash: opts.txHash ?? null,
+    cid: opts.cid ?? null,
   };
   session.log.push(entry);
-  broadcast(session.marketId, { type: 'log', marketId: session.marketId, payload: entry });
-}
-
-function updateAgent(session: ResolutionSession, agentId: number, patch: Partial<OracleAgent>) {
-  const agent = session.agents.find(a => a.id === agentId);
-  if (!agent) return;
-  Object.assign(agent, patch);
   broadcast(session.marketId, {
-    type:     'agent_update',
+    type: 'log',
     marketId: session.marketId,
-    payload:  agent,
+    payload: entry,
   });
 }
 
-function patchSession(session: ResolutionSession, patch: Partial<ResolutionSession>) {
+function updateAgent(
+  session: ResolutionSession,
+  agentId: number,
+  patch: Partial<OracleAgent>,
+) {
+  const agent = session.agents.find((a) => a.id === agentId);
+  if (!agent) return;
+  Object.assign(agent, patch);
+  broadcast(session.marketId, {
+    type: 'agent_update',
+    marketId: session.marketId,
+    payload: agent,
+  });
+}
+
+function patchSession(
+  session: ResolutionSession,
+  patch: Partial<ResolutionSession>,
+) {
   Object.assign(session, patch);
   broadcast(session.marketId, {
     type: 'session_patch',
@@ -187,14 +235,19 @@ async function generateAgentReasoning(
   // Deterministic fallback keeps orchestration resilient even without API key.
   const fallback: ReasoningResult = {
     vote: defaultVote,
-    reasoning: `${agent.name} (${source}) confirms ${defaultVote ? 'YES' : 'NO'} from source signals and quorum alignment checks.`,
+    reasoning: `${agent.name} (${source}) confirms ${
+      defaultVote ? 'YES' : 'NO'
+    } from source signals and quorum alignment checks.`,
   };
 
   if (!OPENAI_API_KEY) return fallback;
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), ORACLE_REASONING_TIMEOUT_MS);
+    const timeout = setTimeout(
+      () => controller.abort(),
+      ORACLE_REASONING_TIMEOUT_MS,
+    );
 
     const prompt = [
       `Market ID: ${session.marketId}`,
@@ -228,7 +281,7 @@ async function generateAgentReasoning(
     clearTimeout(timeout);
 
     if (!res.ok) return fallback;
-    const body = await res.json() as {
+    const body = (await res.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
     };
 
@@ -236,7 +289,8 @@ async function generateAgentReasoning(
     if (!raw) return fallback;
 
     const parsed = JSON.parse(raw) as { vote?: string; reasoning?: string };
-    const modelVote = String(parsed.vote ?? '').toUpperCase() === 'NO' ? false : true;
+    const modelVote =
+      String(parsed.vote ?? '').toUpperCase() === 'NO' ? false : true;
     const reasoning = String(parsed.reasoning ?? '').trim();
 
     return {
@@ -253,29 +307,36 @@ async function generateAgentReasoning(
 async function runAgent(
   session: ResolutionSession,
   agent: OracleAgent,
-  marketOutcome: boolean,  // the "correct" outcome for this market
+  marketOutcome: boolean, // the "correct" outcome for this market
 ) {
-  const delay      = agentDelay(agent.id);
-  const agentDef   = AGENT_DEFINITIONS.find(d => d.id === agent.id);
-  const source     = agentDef?.source ?? 'unknown';
+  const delay = agentDelay(agent.id);
+  const agentDef = AGENT_DEFINITIONS.find((d) => d.id === agent.id);
+  const source = agentDef?.source ?? 'unknown';
 
   // ── FETCHING ────────────────────────────────────────────────────────────────
   updateAgent(session, agent.id, { status: 'fetching' });
-  addLog(session, `fetching source data from ${source}`, { agentName: agent.name });
+  addLog(session, `fetching source data from ${source}`, {
+    agentName: agent.name,
+  });
 
   await sleep(delay);
 
   // Slight disagreement fallback keeps non-unanimous behavior in degraded mode.
-  const fallbackVote = agent.id === 7 && Math.random() < 0.15 ? !marketOutcome : marketOutcome;
+  const fallbackVote =
+    agent.id === 7 && Math.random() < 0.15 ? !marketOutcome : marketOutcome;
   const ai = await generateAgentReasoning(session, agent, source, fallbackVote);
   const vote = ai.vote;
   const reasoning = ai.reasoning;
 
   // ── ATTESTING ───────────────────────────────────────────────────────────────
-  updateAgent(session, agent.id, { status: 'attesting', vote, reasoning, source });
-  addLog(session, `attested ${vote ? 'YES' : 'NO'} — "${reasoning.slice(0, 96)}..."`, {
-    agentName: agent.name,
-  });
+  updateAgent(session, agent.id, { status: 'attesting', reasoning, source });
+  addLog(
+    session,
+    `attested ${vote ? 'YES' : 'NO'} — "${reasoning.slice(0, 96)}..."`,
+    {
+      agentName: agent.name,
+    },
+  );
 
   // Upload intermediate evidence to Storacha
   let storachaCid = '';
@@ -283,60 +344,78 @@ async function runAgent(
     storachaCid = await saveIntermediateEvidence(agent.id, session.marketId, {
       source,
       timestamp: new Date().toISOString(),
-      claim:     vote ? 'YES' : 'NO',
+      claim: vote ? 'YES' : 'NO',
       vote,
-      dataHash:  ethers.keccak256(ethers.toUtf8Bytes(`${agent.name}-${session.marketId}-${Date.now()}`)),
+      dataHash: ethers.keccak256(
+        ethers.toUtf8Bytes(`${agent.name}-${session.marketId}-${Date.now()}`),
+      ),
       reasoning,
     });
   } catch (err) {
     storachaCid = `storacha-not-configured-agent-${agent.id}`;
-    console.warn(`[Agent ${agent.id}] Storacha unavailable: ${(err as Error).message}`);
+    console.warn(
+      `[Agent ${agent.id}] Storacha unavailable: ${(err as Error).message}`,
+    );
   }
 
   updateAgent(session, agent.id, { storachaCid });
   addLog(session, `evidence → Storacha CID: ${storachaCid.slice(0, 20)}...`, {
     agentName: agent.name,
-    cid:       storachaCid,
+    cid: storachaCid,
   });
 
   // Submit attestation on-chain to OracleAgentRegistry (Calibration)
   let calibrationTxHash = '';
   try {
-    calibrationTxHash = await submitAttestation(agent.id, session.marketId, vote, storachaCid);
+    calibrationTxHash = await submitAttestation(
+      agent.id,
+      session.marketId,
+      vote,
+      storachaCid,
+    );
     addLog(session, `attestation recorded on Calibration`, {
       agentName: agent.name,
-      txHash:    calibrationTxHash,
+      txHash: calibrationTxHash,
     });
   } catch (err) {
-    console.warn(`[Agent ${agent.id}] Registry tx failed (registry not deployed?):`, (err as Error).message);
+    console.warn(
+      `[Agent ${agent.id}] Registry tx failed (registry not deployed?):`,
+      (err as Error).message,
+    );
   }
 
   // ── SUBMITTED ───────────────────────────────────────────────────────────────
-  updateAgent(session, agent.id, { status: 'submitted', attestedAt: Date.now() });
+  // Vote is revealed here — after the Calibration tx confirms (or fails).
+  // This keeps the UI honest: badge + green border only appear post-attestation.
+  updateAgent(session, agent.id, {
+    status: 'submitted',
+    vote,
+    attestedAt: Date.now(),
+  });
 
   // Save agent checkpoint to Storacha (persists state across restarts)
   try {
     await saveAgentCheckpoint(agent.id, {
-      lastMarket:      session.marketId,
-      lastVote:        vote,
+      lastMarket: session.marketId,
+      lastVote: vote,
       storachaCid,
-      calibrationTx:   calibrationTxHash,
+      calibrationTx: calibrationTxHash,
       reputationScore: agent.reputationScore,
-      correctVotes:    vote ? 1 : 0,
-      totalVotes:      1,
+      correctVotes: vote ? 1 : 0,
+      totalVotes: 1,
     });
-  } catch { /* non-critical */ }
+  } catch {
+    /* non-critical */
+  }
 
   // Count votes and check for quorum
-  session.yesVotes = session.agents.filter(a => a.vote === true).length;
-  session.noVotes  = session.agents.filter(a => a.vote === false).length;
+  session.yesVotes = session.agents.filter((a) => a.vote === true).length;
+  session.noVotes = session.agents.filter((a) => a.vote === false).length;
 
   if (
     session.phase === 'collecting' &&
-    (
-      session.yesVotes >= quorumThreshold(session.agents.length) ||
-      session.noVotes >= quorumThreshold(session.agents.length)
-    )
+    (session.yesVotes >= quorumThreshold(session.agents.length) ||
+      session.noVotes >= quorumThreshold(session.agents.length))
   ) {
     await finalizeResolution(session);
   }
@@ -344,25 +423,27 @@ async function runAgent(
 
 async function finalizeResolution(session: ResolutionSession) {
   if (session.phase !== 'collecting') return;
-  session.phase   = 'quorum_reached';
+  session.phase = 'quorum_reached';
   session.outcome = session.yesVotes >= quorumThreshold(session.agents.length);
 
   const outcome = session.outcome;
 
   addLog(
     session,
-    `QUORUM REACHED ${session.yesVotes}/${session.agents.length} → outcome: ${outcome ? 'YES' : 'NO'}`,
+    `QUORUM REACHED ${session.yesVotes}/${session.agents.length} → outcome: ${
+      outcome ? 'YES' : 'NO'
+    }`,
     {
-    agentName: null,
-    }
+      agentName: null,
+    },
   );
 
   broadcast(session.marketId, {
-    type:     'quorum_reached',
+    type: 'quorum_reached',
     marketId: session.marketId,
-    payload:  {
+    payload: {
       yesVotes: session.yesVotes,
-      noVotes:  session.noVotes,
+      noVotes: session.noVotes,
       outcome,
     },
   });
@@ -370,45 +451,55 @@ async function finalizeResolution(session: ResolutionSession) {
   // ── Upload finalized evidence bundle to Filecoin via Synapse SDK ─────────────
 
   session.phase = 'uploading';
-  addLog(session, 'uploading finalized evidence bundle to Filecoin via Synapse SDK...');
+  addLog(
+    session,
+    'uploading finalized evidence bundle to Filecoin via Synapse SDK...',
+  );
 
   const evidenceBundle = {
-    type:      'finalized-evidence-bundle',
-    marketId:  session.marketId,
-    outcome:   outcome ? 'YES' : 'NO',
-    quorum:    `${session.yesVotes}-of-${session.agents.length}`,
+    type: 'finalized-evidence-bundle',
+    marketId: session.marketId,
+    outcome: outcome ? 'YES' : 'NO',
+    quorum: `${session.yesVotes}-of-${session.agents.length}`,
     finalizedAt: new Date().toISOString(),
     attestations: session.agents
-      .filter(a => a.vote !== null)
-      .map(a => ({
-        agentId:    a.id,
-        agentName:  a.name,
-        vote:       a.vote ? 'YES' : 'NO',
+      .filter((a) => a.vote !== null)
+      .map((a) => ({
+        agentId: a.id,
+        agentName: a.name,
+        vote: a.vote ? 'YES' : 'NO',
         storachaCid: a.storachaCid,
       })),
   };
 
   let finalEvidenceCid = '';
   try {
-    finalEvidenceCid = await uploadToFilecoin(evidenceBundle, `market-${session.marketId}-evidence-bundle`);
+    finalEvidenceCid = await uploadToFilecoin(
+      evidenceBundle,
+      `market-${session.marketId}-evidence-bundle`,
+    );
     session.finalEvidenceCid = finalEvidenceCid;
-    addLog(session, `evidence bundle → Filecoin Piece CID: ${finalEvidenceCid}`, {
-      cid: finalEvidenceCid,
-    });
+    addLog(
+      session,
+      `evidence bundle → Filecoin Piece CID: ${finalEvidenceCid}`,
+      {
+        cid: finalEvidenceCid,
+      },
+    );
   } catch (err) {
     console.warn('[Synapse] Upload failed:', (err as Error).message);
     finalEvidenceCid = 'bafkzcib-not-configured';
     session.finalEvidenceCid = finalEvidenceCid;
   }
 
-  const votingAgents = session.agents.filter(a => a.vote !== null);
+  const votingAgents = session.agents.filter((a) => a.vote !== null);
 
   // ── FINALIZE NOW — evidence bundle on Filecoin is the canonical proof ─────────
   // The Piece CID proves quorum immutably.  Everything below (registry CID
   // records on Calibration + rep snapshot uploads to Filecoin) is bookkeeping
   // that runs in the background and does not gate settlement.
 
-  session.phase       = 'finalized';
+  session.phase = 'finalized';
   session.finalizedAt = Date.now();
 
   markMarketFinalized(session.marketId, outcome);
@@ -416,9 +507,9 @@ async function finalizeResolution(session: ResolutionSession) {
   addLog(session, 'resolution finalized — oracle outcome sealed');
 
   broadcast(session.marketId, {
-    type:     'finalized',
+    type: 'finalized',
     marketId: session.marketId,
-    payload:  {
+    payload: {
       outcome,
       finalEvidenceCid,
       calibrationTxHash: session.calibrationTxHash,
@@ -437,45 +528,94 @@ async function finalizeResolution(session: ResolutionSession) {
   });
 
   if (ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY) {
-    addLog(session, 'post-finalize settlement sweep queued (autonomous relay mode)');
+    addLog(
+      session,
+      'post-finalize settlement sweep queued (autonomous relay mode)',
+    );
   } else {
-    addLog(session, 'autonomous settlement relay disabled — users claim via /oracle/settle/:marketId');
+    addLog(
+      session,
+      'autonomous settlement relay disabled — users claim via /oracle/settle/:marketId',
+    );
   }
 
-  void runAutonomousSettlementSweep(session);
-
-  // ── Background: canonical Sepolia resolve, then mirror status to Flow ──────────
+  // ── Background: canonical Sepolia resolve → settlement sweep → Flow mirror ────
+  // Order matters: settlement reads GhostEAMM.getMarketMeta() to verify the market
+  // is Resolved before signing. Running it before the resolveMarket tx confirms
+  // produces "Market not resolved (status: 0)". We therefore chain the sweep
+  // inside the Sepolia sync block so it only fires after confirmation.
   patchSession(session, {
     sepoliaResolutionSync: { status: 'pending', txHash: null },
     flowResolutionSync: { status: 'pending', txHash: null },
   });
-  addLog(session, 'starting cross-chain status sync (Sepolia canonical -> Flow mirror)');
+  addLog(
+    session,
+    'starting cross-chain status sync (Sepolia canonical -> Flow mirror)',
+  );
 
   void (async () => {
-    const sepoliaSync = await resolveGhostEammOnSepolia(session.marketId, outcome);
+    // Run Sepolia canonical resolve + GhostVault outcome report in parallel.
+    // Both must confirm before the settlement sweep runs — the sweep now reads
+    // pool totals from GhostVault (Option B), so reportOutcome must be on-chain.
+    const [sepoliaSync, vaultOutcomeSync] = await Promise.all([
+      resolveGhostEammOnSepolia(session.marketId, outcome),
+      reportOutcomeToVault(session.marketId, outcome),
+    ]);
+
     patchSession(session, { sepoliaResolutionSync: sepoliaSync });
 
+    // Log vault outcome result
+    if (vaultOutcomeSync.status === 'synced') {
+      addLog(session, `GhostVault outcome reported: ${outcome ? 'YES' : 'NO'}`, {
+        txHash: vaultOutcomeSync.txHash ?? null,
+      });
+    } else if (vaultOutcomeSync.status === 'already_set') {
+      addLog(session, 'GhostVault outcome already set (idempotent)');
+    } else if (vaultOutcomeSync.status === 'skipped') {
+      addLog(session, 'GhostVault outcome report skipped (missing config)');
+    } else {
+      addLog(session, `GhostVault outcome report failed: ${vaultOutcomeSync.message}`);
+    }
+
     if (sepoliaSync.status === 'synced') {
-      addLog(session, 'Sepolia market status synced', { txHash: sepoliaSync.txHash ?? null });
+      addLog(session, 'Sepolia market status synced', {
+        txHash: sepoliaSync.txHash ?? null,
+      });
+      void runAutonomousSettlementSweep(session);
     } else if (sepoliaSync.status === 'skipped') {
       addLog(session, 'Sepolia sync skipped (missing config)');
+      // Settlement sweep still runs — Option B reads outcome from GhostVault,
+      // so Sepolia is not required for payout computation.
+      void runAutonomousSettlementSweep(session);
     } else {
-      addLog(session, 'Sepolia sync failed', { txHash: sepoliaSync.txHash ?? null });
+      addLog(session, 'Sepolia sync failed', {
+        txHash: sepoliaSync.txHash ?? null,
+      });
       patchSession(session, {
         flowResolutionSync: { status: 'skipped', txHash: null },
       });
-      addLog(session, 'Flow mirror skipped because Sepolia canonical resolve did not sync');
+      addLog(
+        session,
+        'Flow mirror skipped because Sepolia canonical resolve did not sync',
+      );
       return;
     }
 
     const flowSync = await resolveFlowMarketOnFlow(session.marketId, outcome);
     patchSession(session, { flowResolutionSync: flowSync });
     if (flowSync.status === 'synced') {
-      addLog(session, 'Flow market status mirrored', { txHash: flowSync.txHash ?? null });
+      addLog(session, 'Flow market status mirrored', {
+        txHash: flowSync.txHash ?? null,
+      });
     } else if (flowSync.status === 'skipped') {
-      addLog(session, 'Flow mirror pending/skipped (missing config or market not expired yet)');
+      addLog(
+        session,
+        'Flow mirror pending/skipped (missing config or market not expired yet)',
+      );
     } else {
-      addLog(session, 'Flow mirror failed', { txHash: flowSync.txHash ?? null });
+      addLog(session, 'Flow mirror failed', {
+        txHash: flowSync.txHash ?? null,
+      });
     }
   })();
 
@@ -483,11 +623,18 @@ async function finalizeResolution(session: ResolutionSession) {
   // Serialised by enqueueWrite (Calibration nonce ordering) but non-blocking.
   // Fires and forgets — each tx logs its own result when it confirms.
 
-  addLog(session, 'recording evidence CID in OracleAgentRegistry (background)...');
+  addLog(
+    session,
+    'recording evidence CID in OracleAgentRegistry (background)...',
+  );
 
   Promise.allSettled(
     votingAgents.map(async (agent) => {
-      const txHash = await recordEvidence(agent.id, session.marketId, finalEvidenceCid);
+      const txHash = await recordEvidence(
+        agent.id,
+        session.marketId,
+        finalEvidenceCid,
+      );
       if (txHash) {
         patchSession(session, { calibrationTxHash: txHash });
         addLog(session, `OracleAgentRegistry updated for agent-${agent.id}`, {
@@ -498,15 +645,26 @@ async function finalizeResolution(session: ResolutionSession) {
       return txHash;
     }),
   ).then((results) => {
-    const txHash = results
-      .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled' && !!r.value)
-      .map(r => r.value)
-      .at(-1) ?? '';
+    const txHash =
+      results
+        .filter(
+          (r): r is PromiseFulfilledResult<string> =>
+            r.status === 'fulfilled' && !!r.value,
+        )
+        .map((r) => r.value)
+        .at(-1) ?? '';
     if (txHash) {
       session.calibrationTxHash = txHash;
-      addLog(session, `OracleAgentRegistry updated → Calibration tx: ${txHash.slice(0, 18)}...`, {
-        txHash,
-      });
+      addLog(
+        session,
+        `OracleAgentRegistry updated → Calibration tx: ${txHash.slice(
+          0,
+          18,
+        )}...`,
+        {
+          txHash,
+        },
+      );
     }
   });
 
@@ -514,36 +672,52 @@ async function finalizeResolution(session: ResolutionSession) {
   // Still goes to Filecoin via Synapse SDK — satisfies Track 3 (Reputation &
   // Portable Identity).  4 concurrent Synapse uploads ≈ time of 1 serial upload.
 
-  addLog(session, 'uploading reputation snapshots to Filecoin (parallel, background)...');
+  addLog(
+    session,
+    'uploading reputation snapshots to Filecoin (parallel, background)...',
+  );
 
   Promise.allSettled(
     votingAgents.map(async (agent) => {
-      const correct  = agent.vote === outcome;
+      const correct = agent.vote === outcome;
       const newScore = correct
         ? Math.min(100, agent.reputationScore + 2)
-        : Math.max(0,   agent.reputationScore - 10);
+        : Math.max(0, agent.reputationScore - 10);
 
       const repSnapshot = {
-        type:        'reputation-snapshot',
-        agentId:     agent.id,
-        agentName:   agent.name,
-        marketId:    session.marketId,
-        vote:        agent.vote ? 'YES' : 'NO',
+        type: 'reputation-snapshot',
+        agentId: agent.id,
+        agentName: agent.name,
+        marketId: session.marketId,
+        vote: agent.vote ? 'YES' : 'NO',
         correct,
         scoreBefore: agent.reputationScore,
-        scoreAfter:  newScore,
-        timestamp:   new Date().toISOString(),
+        scoreAfter: newScore,
+        timestamp: new Date().toISOString(),
       };
 
       let repCid = '';
       try {
-        repCid = await uploadToFilecoin(repSnapshot, `agent-${agent.id}-rep-snapshot`);
-        addLog(session, `agent-${agent.id} rep snapshot → Filecoin CID: ${repCid.slice(0, 20)}...`, {
-          agentName: agent.name,
-          cid:       repCid,
-        });
+        repCid = await uploadToFilecoin(
+          repSnapshot,
+          `agent-${agent.id}-rep-snapshot`,
+        );
+        addLog(
+          session,
+          `agent-${agent.id} rep snapshot → Filecoin CID: ${repCid.slice(
+            0,
+            20,
+          )}...`,
+          {
+            agentName: agent.name,
+            cid: repCid,
+          },
+        );
       } catch (err) {
-        console.warn(`[Synapse] Rep snapshot for agent ${agent.id} failed:`, (err as Error).message);
+        console.warn(
+          `[Synapse] Rep snapshot for agent ${agent.id} failed:`,
+          (err as Error).message,
+        );
       }
 
       if (agent.erc8004Id !== null) {
@@ -554,7 +728,9 @@ async function finalizeResolution(session: ResolutionSession) {
             finalEvidenceCid,
             session.marketId,
           );
-        } catch { /* not fatal */ }
+        } catch {
+          /* not fatal */
+        }
       }
 
       updateAgent(session, agent.id, { reputationScore: newScore });
@@ -564,7 +740,9 @@ async function finalizeResolution(session: ResolutionSession) {
   });
 }
 
-async function runAutonomousSettlementSweep(session: ResolutionSession): Promise<void> {
+async function runAutonomousSettlementSweep(
+  session: ResolutionSession,
+): Promise<void> {
   if (!ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY) return;
   if (session.phase !== 'finalized') return;
 
@@ -579,7 +757,10 @@ async function runAutonomousSettlementSweep(session: ResolutionSession): Promise
     });
 
     if (users.length === 0) {
-      addLog(session, 'settlement sweep found no registered participants for this market');
+      addLog(
+        session,
+        'settlement sweep found no registered participants for this market',
+      );
       patchSession(session, {
         settlementRelay: {
           ...session.settlementRelay,
@@ -589,7 +770,10 @@ async function runAutonomousSettlementSweep(session: ResolutionSession): Promise
       return;
     }
 
-    addLog(session, `settlement sweep started for ${users.length} participant(s)`);
+    addLog(
+      session,
+      `settlement sweep started for ${users.length} participant(s)`,
+    );
 
     let processedUsers = 0;
     let relayedUsers = 0;
@@ -597,7 +781,10 @@ async function runAutonomousSettlementSweep(session: ResolutionSession): Promise
 
     for (const userAddress of users) {
       try {
-        const settlement = await getOrComputeSettlement(session.marketId, userAddress);
+        const settlement = await getOrComputeSettlement(
+          session.marketId,
+          userAddress,
+        );
         const txHash = await deliverSettlementOnChain(settlement);
         processedUsers += 1;
 
@@ -611,13 +798,19 @@ async function runAutonomousSettlementSweep(session: ResolutionSession): Promise
             payload: { userAddress, txHash },
           });
         } else {
-          addLog(session, `settlement prepared for ${userAddress} (no relay tx sent)`);
+          addLog(
+            session,
+            `settlement prepared for ${userAddress} (no relay tx sent)`,
+          );
         }
       } catch (err) {
         processedUsers += 1;
         failedUsers += 1;
         const message = (err as Error).message ?? 'unknown settlement error';
-        addLog(session, `settlement sweep failed for ${userAddress}: ${message}`);
+        addLog(
+          session,
+          `settlement sweep failed for ${userAddress}: ${message}`,
+        );
       }
 
       patchSession(session, {
@@ -642,8 +835,9 @@ async function runAutonomousSettlementSweep(session: ResolutionSession): Promise
     });
     addLog(
       session,
-      `settlement sweep ${failedUsers > 0 ? 'completed with failures' : 'completed'} ` +
-      `(${relayedUsers}/${processedUsers} relayed)`,
+      `settlement sweep ${
+        failedUsers > 0 ? 'completed with failures' : 'completed'
+      } ` + `(${relayedUsers}/${processedUsers} relayed)`,
     );
   } catch (err) {
     const message = (err as Error).message ?? 'unknown sweep error';
@@ -669,16 +863,19 @@ async function resolveGhostEammOnSepolia(
   marketId: string,
   outcome: boolean,
 ): Promise<{ status: 'synced' | 'failed' | 'skipped'; txHash: string | null }> {
-  const sepoliaRpc  = process.env.SEPOLIA_RPC_URL              ?? 'https://rpc.sepolia.org';
+  const sepoliaRpc = process.env.SEPOLIA_RPC_URL ?? 'https://rpc.sepolia.org';
   // Use EAMM_RESOLVER_PRIVATE_KEY (deployer/owner) — the oracle's SEPOLIA_PRIVATE_KEY
   // may not have the onlyResolverOrOwner role on GhostEAMM.
-  const sepoliaKey  = process.env.EAMM_RESOLVER_PRIVATE_KEY
-                   ?? process.env.SEPOLIA_PRIVATE_KEY
-                   ?? '';
-  const eammAddress = process.env.GHOST_EAMM_ADDRESS            ?? '';
+  const sepoliaKey =
+    process.env.EAMM_RESOLVER_PRIVATE_KEY ??
+    process.env.SEPOLIA_PRIVATE_KEY ??
+    '';
+  const eammAddress = process.env.GHOST_EAMM_ADDRESS ?? '';
 
   if (!sepoliaKey || !eammAddress) {
-    console.warn('[EAMM] Skipping resolveMarket — SEPOLIA_PRIVATE_KEY or GHOST_EAMM_ADDRESS not set');
+    console.warn(
+      '[EAMM] Skipping resolveMarket — SEPOLIA_PRIVATE_KEY or GHOST_EAMM_ADDRESS not set',
+    );
     return { status: 'skipped', txHash: null };
   }
 
@@ -689,25 +886,37 @@ async function resolveGhostEammOnSepolia(
 
   try {
     const provider = new ethers.JsonRpcProvider(sepoliaRpc);
-    const wallet   = new ethers.Wallet(sepoliaKey, provider);
-    const eamm     = new ethers.Contract(eammAddress, EAMM_RESOLVE_ABI, wallet);
+    const wallet = new ethers.Wallet(sepoliaKey, provider);
+    const eamm = new ethers.Contract(eammAddress, EAMM_RESOLVE_ABI, wallet);
 
     // Check current status before sending tx (idempotent)
-    const [currentStatus] = await eamm.getMarketMeta(BigInt(marketId)) as [number, boolean, bigint];
+    const [currentStatus] = (await eamm.getMarketMeta(BigInt(marketId))) as [
+      number,
+      boolean,
+      bigint,
+    ];
     if (Number(currentStatus) === 1) {
-      console.log(`[EAMM] Market ${marketId} already Resolved on Sepolia — skipping`);
+      console.log(
+        `[EAMM] Market ${marketId} already Resolved on Sepolia — skipping`,
+      );
       return { status: 'synced', txHash: null };
     }
 
-    console.log(`[EAMM] Resolving market ${marketId} on Sepolia (outcome=${outcome})…`);
+    console.log(
+      `[EAMM] Resolving market ${marketId} on Sepolia (outcome=${outcome})…`,
+    );
     const tx = await eamm.resolveMarket(BigInt(marketId), outcome);
     console.log(`[EAMM] resolveMarket TX: ${tx.hash}`);
     const receipt = await tx.wait();
-    console.log(`[EAMM] Market ${marketId} Resolved on Sepolia — block ${receipt.blockNumber}`);
+    console.log(
+      `[EAMM] Market ${marketId} Resolved on Sepolia — block ${receipt.blockNumber}`,
+    );
     console.log(`[EAMM] Etherscan: https://sepolia.etherscan.io/tx/${tx.hash}`);
     return { status: 'synced', txHash: tx.hash };
   } catch (err) {
-    console.warn(`[EAMM] resolveMarket failed (non-fatal): ${(err as Error).message}`);
+    console.warn(
+      `[EAMM] resolveMarket failed (non-fatal): ${(err as Error).message}`,
+    );
     return { status: 'failed', txHash: null };
   }
 }
@@ -716,7 +925,8 @@ async function resolveFlowMarketOnFlow(
   marketId: string,
   outcome: boolean,
 ): Promise<{ status: 'synced' | 'failed' | 'skipped'; txHash: string | null }> {
-  const flowRpc = process.env.FLOW_RPC_URL ?? 'https://testnet.evm.nodes.onflow.org';
+  const flowRpc =
+    process.env.FLOW_RPC_URL ?? 'https://testnet.evm.nodes.onflow.org';
   const flowKey =
     process.env.FLOW_MARKET_RESOLVER_PRIVATE_KEY ??
     process.env.EAMM_RESOLVER_PRIVATE_KEY ??
@@ -728,7 +938,9 @@ async function resolveFlowMarketOnFlow(
     '';
 
   if (!flowKey || !marketAddress) {
-    console.warn('[FlowMarket] Skipping resolveMarket — resolver key or GHOST_MARKET_ADDRESS not set');
+    console.warn(
+      '[FlowMarket] Skipping resolveMarket — resolver key or GHOST_MARKET_ADDRESS not set',
+    );
     return { status: 'skipped', txHash: null };
   }
 
@@ -745,15 +957,21 @@ async function resolveFlowMarketOnFlow(
     const raw = await market.markets(BigInt(marketId));
     const status = Number(raw[5] ?? 0);
     if (status === 1) {
-      console.log(`[FlowMarket] Market ${marketId} already Resolved on Flow — skipping`);
+      console.log(
+        `[FlowMarket] Market ${marketId} already Resolved on Flow — skipping`,
+      );
       return { status: 'synced', txHash: null };
     }
 
     const tx = await market.resolveMarket(BigInt(marketId), outcome);
     console.log(`[FlowMarket] resolveMarket TX: ${tx.hash}`);
     const receipt = await tx.wait();
-    console.log(`[FlowMarket] Market ${marketId} Resolved on Flow — block ${receipt.blockNumber}`);
-    console.log(`[FlowMarket] Flowscan: https://evm-testnet.flowscan.io/tx/${tx.hash}`);
+    console.log(
+      `[FlowMarket] Market ${marketId} Resolved on Flow — block ${receipt.blockNumber}`,
+    );
+    console.log(
+      `[FlowMarket] Flowscan: https://evm-testnet.flowscan.io/tx/${tx.hash}`,
+    );
     return { status: 'synced', txHash: tx.hash };
   } catch (err) {
     const message = (err as Error).message ?? '';
@@ -779,7 +997,8 @@ async function resolveFlowMarketOnFlow(
 app.get('/oracle/storacha/read/:cid', async (req, res) => {
   try {
     const data = await readPeerEvidence(req.params.cid);
-    if (!data) return res.status(404).json({ error: 'CID not found or unreadable' });
+    if (!data)
+      return res.status(404).json({ error: 'CID not found or unreadable' });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
@@ -800,12 +1019,22 @@ app.get('/oracle/storacha/agent-heads', (_req, res) => {
  */
 app.get('/oracle/storacha/checkpoint/:agentId', async (req, res) => {
   const agentId = Number(req.params.agentId);
-  const rep     = agentReputation.get(agentId);
-  const last    = agentLastMarket.get(agentId);
+  const rep = agentReputation.get(agentId);
+  const last = agentLastMarket.get(agentId);
   if (rep !== undefined) {
-    res.json({ agentId, reputationScore: rep, lastMarket: last ?? null, source: 'storacha-checkpoint' });
+    res.json({
+      agentId,
+      reputationScore: rep,
+      lastMarket: last ?? null,
+      source: 'storacha-checkpoint',
+    });
   } else {
-    res.json({ agentId, reputationScore: 80, lastMarket: null, source: 'default' });
+    res.json({
+      agentId,
+      reputationScore: 80,
+      lastMarket: null,
+      source: 'default',
+    });
   }
 });
 
@@ -819,7 +1048,11 @@ app.post('/oracle/storacha/upload', async (req, res) => {
       marketId: number;
       evidence: Record<string, unknown>;
     };
-    const cid = await saveIntermediateEvidence(agentId, marketId, evidence as Parameters<typeof saveIntermediateEvidence>[2]);
+    const cid = await saveIntermediateEvidence(
+      agentId,
+      marketId,
+      evidence as Parameters<typeof saveIntermediateEvidence>[2],
+    );
     res.json({ cid });
   } catch (err) {
     console.warn('[Storacha] upload failed:', (err as Error).message);
@@ -836,7 +1069,12 @@ app.post('/oracle/registry/attest', async (req, res) => {
       vote: boolean;
       storachaCid: string;
     };
-    const txHash = await submitAttestation(agentId, marketId, vote, storachaCid);
+    const txHash = await submitAttestation(
+      agentId,
+      marketId,
+      vote,
+      storachaCid,
+    );
     res.json({ txHash });
   } catch (err) {
     console.warn('[Registry] attest failed:', (err as Error).message);
@@ -852,22 +1090,33 @@ app.post('/oracle/synapse/upload-bundle', async (req, res) => {
       outcome: boolean;
       yesVotes: number;
       noVotes: number;
-      agents: Array<{ id: number; name: string; vote: boolean; storachaCid: string | null; reasoning: string }>;
+      agents: Array<{
+        id: number;
+        name: string;
+        vote: boolean;
+        storachaCid: string | null;
+        reasoning: string;
+      }>;
     };
 
     const payload = {
-      type:        'finalized-evidence-bundle',
+      type: 'finalized-evidence-bundle',
       ...bundle,
-      outcome:     bundle.outcome ? 'YES' : 'NO',
-      quorum:      `${bundle.yesVotes}-of-${bundle.agents.length}`,
+      outcome: bundle.outcome ? 'YES' : 'NO',
+      quorum: `${bundle.yesVotes}-of-${bundle.agents.length}`,
       finalizedAt: new Date().toISOString(),
     };
 
-    const pieceCid = await uploadToFilecoin(payload, `market-${bundle.marketId}-bundle`);
+    const pieceCid = await uploadToFilecoin(
+      payload,
+      `market-${bundle.marketId}-bundle`,
+    );
 
     // Record evidence CID in registry for each attesting agent (parallel)
     const registrySettled = await Promise.allSettled(
-      bundle.agents.map(agent => recordEvidence(agent.id, bundle.marketId, pieceCid)),
+      bundle.agents.map((agent) =>
+        recordEvidence(agent.id, bundle.marketId, pieceCid),
+      ),
     );
     let calibrationTx = '';
     for (const r of registrySettled) {
@@ -877,7 +1126,11 @@ app.post('/oracle/synapse/upload-bundle', async (req, res) => {
     res.json({ pieceCid, calibrationTx });
   } catch (err) {
     console.warn('[Synapse] bundle upload failed:', (err as Error).message);
-    res.json({ pieceCid: null, calibrationTx: null, error: (err as Error).message });
+    res.json({
+      pieceCid: null,
+      calibrationTx: null,
+      error: (err as Error).message,
+    });
   }
 });
 
@@ -888,36 +1141,44 @@ app.post('/oracle/reputation/update', async (req, res) => {
       marketId: number;
       outcome: boolean;
       evidenceCid: string;
-      agents: Array<{ id: number; name: string; vote: boolean | null; reputation: number; erc8004Id: number | null }>;
+      agents: Array<{
+        id: number;
+        name: string;
+        vote: boolean | null;
+        reputation: number;
+        erc8004Id: number | null;
+      }>;
     };
 
-    const votingAgents = agents.filter(a => a.vote !== null);
+    const votingAgents = agents.filter((a) => a.vote !== null);
 
     // Upload all rep snapshots to Filecoin in parallel (same destination — Synapse —
     // just concurrent instead of serial, so 4 uploads ≈ time of 1).
     const results = await Promise.allSettled(
       votingAgents.map(async (agent) => {
-        const correct  = agent.vote === outcome;
+        const correct = agent.vote === outcome;
         const newScore = correct
           ? Math.min(100, agent.reputation + 2)
-          : Math.max(0,   agent.reputation - 10);
+          : Math.max(0, agent.reputation - 10);
 
         const snapshot = {
-          type:        'reputation-snapshot',
-          agentId:     agent.id,
-          agentName:   agent.name,
+          type: 'reputation-snapshot',
+          agentId: agent.id,
+          agentName: agent.name,
           marketId,
-          vote:        agent.vote ? 'YES' : 'NO',
+          vote: agent.vote ? 'YES' : 'NO',
           correct,
           scoreBefore: agent.reputation,
-          scoreAfter:  newScore,
-          timestamp:   new Date().toISOString(),
+          scoreAfter: newScore,
+          timestamp: new Date().toISOString(),
         };
 
         let repCid = '';
         try {
           repCid = await uploadToFilecoin(snapshot, `agent-${agent.id}-rep`);
-        } catch { /* not fatal in dev */ }
+        } catch {
+          /* not fatal in dev */
+        }
 
         if (agent.erc8004Id !== null) {
           try {
@@ -927,7 +1188,9 @@ app.post('/oracle/reputation/update', async (req, res) => {
               evidenceCid || repCid,
               marketId,
             );
-          } catch { /* not fatal */ }
+          } catch {
+            /* not fatal */
+          }
         }
 
         return { agentId: agent.id, newScore, repCid };
@@ -935,10 +1198,16 @@ app.post('/oracle/reputation/update', async (req, res) => {
     );
 
     const updates = results
-      .filter((r): r is PromiseFulfilledResult<{ agentId: number; newScore: number; repCid: string }> =>
-        r.status === 'fulfilled',
+      .filter(
+        (
+          r,
+        ): r is PromiseFulfilledResult<{
+          agentId: number;
+          newScore: number;
+          repCid: string;
+        }> => r.status === 'fulfilled',
       )
-      .map(r => r.value);
+      .map((r) => r.value);
 
     res.json({ updates });
   } catch (err) {
@@ -955,7 +1224,11 @@ app.post('/oracle/reputation/update', async (req, res) => {
  * Registers the canonical BetPlaced tx hash for deterministic settlement later.
  */
 app.post('/oracle/bets/register', async (req, res) => {
-  const body = req.body as { marketId?: string | number; userAddress?: string; betTxHash?: string };
+  const body = req.body as {
+    marketId?: string | number;
+    userAddress?: string;
+    betTxHash?: string;
+  };
   const marketId = body.marketId !== undefined ? String(body.marketId) : '';
   const userAddress = body.userAddress ?? '';
   const betTxHash = body.betTxHash ?? '';
@@ -1023,15 +1296,35 @@ app.get('/oracle/bets/:marketId/:userAddress', async (req, res) => {
  * on Flow EVM to release their collateral lock and credit the payout.
  */
 app.post('/oracle/settle/:marketId', async (req, res) => {
-  const marketId    = req.params.marketId;
-  const body        = req.body as { userAddress?: string; betTxHash?: string };
+  const marketId = req.params.marketId;
+  const body = req.body as { userAddress?: string; betTxHash?: string };
   const userAddress = body?.userAddress;
   // Optional: the tx hash where the user placed their bet.
   // When provided, the oracle resolves its exact block number and passes it to
   // the Lit Action so eth_getLogs uses a 1-block range (works on Alchemy free tier).
-  const betTxHash   = body?.betTxHash;
+  const betTxHash = body?.betTxHash;
   // #region agent log
-  fetch('http://127.0.0.1:7884/ingest/fbd2257e-f2ff-467e-b558-4abfac1502be',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37e9d3'},body:JSON.stringify({sessionId:'37e9d3',runId:'settle-request',hypothesisId:'H1',location:'index.ts:settle-entry',message:'Settlement request received',data:{marketId,userAddress:userAddress ?? null,hasBetTxHash:Boolean(betTxHash),betTxHashPrefix:betTxHash?.slice(0,18) ?? null},timestamp:Date.now()})}).catch(()=>{});
+  fetch('http://127.0.0.1:7884/ingest/fbd2257e-f2ff-467e-b558-4abfac1502be', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Debug-Session-Id': '37e9d3',
+    },
+    body: JSON.stringify({
+      sessionId: '37e9d3',
+      runId: 'settle-request',
+      hypothesisId: 'H1',
+      location: 'index.ts:settle-entry',
+      message: 'Settlement request received',
+      data: {
+        marketId,
+        userAddress: userAddress ?? null,
+        hasBetTxHash: Boolean(betTxHash),
+        betTxHashPrefix: betTxHash?.slice(0, 18) ?? null,
+      },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
   // #endregion
 
   if (!userAddress || !/^0x[0-9a-fA-F]{40}$/.test(userAddress)) {
@@ -1048,40 +1341,68 @@ app.post('/oracle/settle/:marketId', async (req, res) => {
 
   try {
     // #region agent log
-    fetch('http://127.0.0.1:7884/ingest/fbd2257e-f2ff-467e-b558-4abfac1502be',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37e9d3'},body:JSON.stringify({sessionId:'37e9d3',runId:'settle-request',hypothesisId:'H1-H2',location:'index.ts:before-getOrComputeSettlement',message:'Calling getOrComputeSettlement',data:{marketId,userAddress,hasBetTxHash:Boolean(betTxHash)},timestamp:Date.now()})}).catch(()=>{});
+    fetch('http://127.0.0.1:7884/ingest/fbd2257e-f2ff-467e-b558-4abfac1502be', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Debug-Session-Id': '37e9d3',
+      },
+      body: JSON.stringify({
+        sessionId: '37e9d3',
+        runId: 'settle-request',
+        hypothesisId: 'H1-H2',
+        location: 'index.ts:before-getOrComputeSettlement',
+        message: 'Calling getOrComputeSettlement',
+        data: { marketId, userAddress, hasBetTxHash: Boolean(betTxHash) },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
     // #endregion
-    const settlement = await getOrComputeSettlement(marketId, userAddress, betTxHash);
+    const settlement = await getOrComputeSettlement(
+      marketId,
+      userAddress,
+      betTxHash,
+    );
 
-    const marketIdUint    = parseInt(marketId, 10).toString();
-    const marketIdBytes32 = '0x' + BigInt(marketIdUint).toString(16).padStart(64, '0');
+    const marketIdUint = parseInt(marketId, 10).toString();
+    const marketIdBytes32 =
+      '0x' + BigInt(marketIdUint).toString(16).padStart(64, '0');
 
     const response: SettlementClaimResponse = {
       marketId,
-      userAddress:     settlement.userAddress,
-      sig:             settlement.sig,
-      payout:          settlement.payout,
-      nonce:           settlement.nonce,
-      expiry:          settlement.expiry,
+      userAddress: settlement.userAddress,
+      sig: settlement.sig,
+      payout: settlement.payout,
+      nonce: settlement.nonce,
+      expiry: settlement.expiry,
       marketIdBytes32,
-      vaultAddress:    process.env.GHOST_VAULT_ADDRESS ?? '0xAf470490b2462DC7359605B8e5D731CbB7816B55',
-      signerAddress:   settlement.signerAddress,
-      signingPath:     settlement.signingPath,
-      deliveredTx:     settlement.deliveredTx,
+      vaultAddress:
+        process.env.GHOST_VAULT_ADDRESS ??
+        '0xAf470490b2462DC7359605B8e5D731CbB7816B55',
+      signerAddress: settlement.signerAddress,
+      signingPath: settlement.signingPath,
+      deliveredTx: settlement.deliveredTx,
     };
 
     // Optionally attempt autonomous delivery in the background
     if (!settlement.deliveredTx && settlement.payout !== '0') {
-      deliverSettlementOnChain(settlement).then((txHash) => {
-        if (txHash && session) {
-          addLog(session, `settlement delivered to Flow EVM → ${txHash}`, { txHash });
-          session.flowTxHash = txHash;
-          broadcast(marketId, {
-            type:     'settlement_delivered',
-            marketId,
-            payload:  { userAddress, txHash, payout: settlement.payout },
-          });
-        }
-      }).catch(() => { /* non-critical */ });
+      deliverSettlementOnChain(settlement)
+        .then((txHash) => {
+          if (txHash && session) {
+            addLog(session, `settlement delivered to Flow EVM → ${txHash}`, {
+              txHash,
+            });
+            session.flowTxHash = txHash;
+            broadcast(marketId, {
+              type: 'settlement_delivered',
+              marketId,
+              payload: { userAddress, txHash, payout: settlement.payout },
+            });
+          }
+        })
+        .catch(() => {
+          /* non-critical */
+        });
     }
 
     res.json(response);
@@ -1102,31 +1423,46 @@ app.get('/oracle/settle/:marketId/:userAddress', (req, res) => {
 
   const session = sessions.get(marketId);
   if (!session || session.phase !== 'finalized') {
-    return res.status(409).json({ error: 'Market not finalized', phase: session?.phase ?? 'unknown' });
+    return res
+      .status(409)
+      .json({
+        error: 'Market not finalized',
+        phase: session?.phase ?? 'unknown',
+      });
   }
 
   const settlements = getMarketSettlements(marketId);
-  const settlement  = settlements.find(s => s.userAddress === userAddress.toLowerCase());
+  const settlement = settlements.find(
+    (s) => s.userAddress === userAddress.toLowerCase(),
+  );
 
   if (!settlement) {
-    return res.status(404).json({ error: 'No settlement computed yet — call POST /oracle/settle/:marketId' });
+    return res
+      .status(404)
+      .json({
+        error:
+          'No settlement computed yet — call POST /oracle/settle/:marketId',
+      });
   }
 
-  const marketIdUint    = parseInt(marketId, 10).toString();
-  const marketIdBytes32 = '0x' + BigInt(marketIdUint).toString(16).padStart(64, '0');
+  const marketIdUint = parseInt(marketId, 10).toString();
+  const marketIdBytes32 =
+    '0x' + BigInt(marketIdUint).toString(16).padStart(64, '0');
 
   const response: SettlementClaimResponse = {
     marketId,
-    userAddress:     settlement.userAddress,
-    sig:             settlement.sig,
-    payout:          settlement.payout,
-    nonce:           settlement.nonce,
-    expiry:          settlement.expiry,
+    userAddress: settlement.userAddress,
+    sig: settlement.sig,
+    payout: settlement.payout,
+    nonce: settlement.nonce,
+    expiry: settlement.expiry,
     marketIdBytes32,
-    vaultAddress:    process.env.GHOST_VAULT_ADDRESS ?? '0xAf470490b2462DC7359605B8e5D731CbB7816B55',
-    signerAddress:   settlement.signerAddress,
-    signingPath:     settlement.signingPath,
-    deliveredTx:     settlement.deliveredTx,
+    vaultAddress:
+      process.env.GHOST_VAULT_ADDRESS ??
+      '0xAf470490b2462DC7359605B8e5D731CbB7816B55',
+    signerAddress: settlement.signerAddress,
+    signingPath: settlement.signingPath,
+    deliveredTx: settlement.deliveredTx,
   };
 
   res.json(response);
@@ -1135,13 +1471,21 @@ app.get('/oracle/settle/:marketId/:userAddress', (req, res) => {
 // ── REST endpoints ─────────────────────────────────────────────────────────────
 
 app.get('/oracle/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'ghost-oracle', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    service: 'ghost-oracle',
+    timestamp: new Date().toISOString(),
+  });
 });
 
 app.get('/oracle/agents', async (_req, res) => {
   try {
     let count = 0;
-    try { count = await getAgentCount(); } catch { /* registry not deployed */ }
+    try {
+      count = await getAgentCount();
+    } catch {
+      /* registry not deployed */
+    }
     const agents: object[] = [];
     for (let i = 1; i <= Math.max(count, ACTIVE_AGENT_COUNT); i++) {
       try {
@@ -1159,8 +1503,11 @@ app.get('/oracle/agents', async (_req, res) => {
 
 app.get('/oracle/status/:marketId', (req, res) => {
   const marketId = req.params.marketId;
-  const session  = sessions.get(marketId);
-  if (!session) return res.status(404).json({ error: 'No resolution session for this market' });
+  const session = sessions.get(marketId);
+  if (!session)
+    return res
+      .status(404)
+      .json({ error: 'No resolution session for this market' });
   res.json(session);
 });
 
@@ -1170,7 +1517,12 @@ app.post('/oracle/resolve/:marketId', async (req, res) => {
   if (sessions.has(marketId)) {
     const existing = sessions.get(marketId)!;
     if (existing.phase !== 'finalized' && existing.phase !== 'failed') {
-      return res.status(409).json({ error: 'Resolution already in progress', phase: existing.phase });
+      return res
+        .status(409)
+        .json({
+          error: 'Resolution already in progress',
+          phase: existing.phase,
+        });
     }
   }
 
@@ -1180,11 +1532,13 @@ app.post('/oracle/resolve/:marketId', async (req, res) => {
 
   // Build fresh agent list with wallet addresses derived at runtime,
   // restoring reputation scores from Storacha checkpoints if available.
-  const baseKey = process.env.CALIBRATION_PRIVATE_KEY ?? ethers.hexlify(ethers.randomBytes(32));
+  const baseKey =
+    process.env.CALIBRATION_PRIVATE_KEY ??
+    ethers.hexlify(ethers.randomBytes(32));
   const addresses = Array.from({ length: ACTIVE_AGENT_COUNT }, (_, i) => {
     try {
       const derived = new ethers.Wallet(
-        ethers.keccak256(ethers.toUtf8Bytes(`${baseKey}-oracle-${i + 1}`))
+        ethers.keccak256(ethers.toUtf8Bytes(`${baseKey}-oracle-${i + 1}`)),
       );
       return derived.address;
     } catch {
@@ -1192,22 +1546,24 @@ app.post('/oracle/resolve/:marketId', async (req, res) => {
     }
   });
 
-  const agentList = buildAgents(addresses).slice(0, ACTIVE_AGENT_COUNT).map(a => ({
-    ...a,
-    // Restore reputation from checkpoint if this agent has one
-    reputationScore: agentReputation.get(a.id) ?? a.reputationScore,
-  }));
+  const agentList = buildAgents(addresses)
+    .slice(0, ACTIVE_AGENT_COUNT)
+    .map((a) => ({
+      ...a,
+      // Restore reputation from checkpoint if this agent has one
+      reputationScore: agentReputation.get(a.id) ?? a.reputationScore,
+    }));
 
   const session: ResolutionSession = {
     marketId,
-    phase:           'collecting',
-    agents:          agentList,
-    yesVotes:        0,
-    noVotes:         0,
-    outcome:         null,
+    phase: 'collecting',
+    agents: agentList,
+    yesVotes: 0,
+    noVotes: 0,
+    outcome: null,
     finalEvidenceCid: null,
     calibrationTxHash: null,
-    flowTxHash:      null,
+    flowTxHash: null,
     sepoliaResolutionSync: { status: 'idle', txHash: null },
     flowResolutionSync: { status: 'idle', txHash: null },
     settlementRelay: {
@@ -1218,20 +1574,23 @@ app.post('/oracle/resolve/:marketId', async (req, res) => {
       failedUsers: 0,
       lastError: null,
     },
-    startedAt:       Date.now(),
-    finalizedAt:     null,
-    log:             [],
+    startedAt: Date.now(),
+    finalizedAt: null,
+    log: [],
   };
 
   sessions.set(marketId, session);
 
-  addLog(session, `resolution started for market ${marketId} — ${ACTIVE_AGENT_COUNT} agents initializing`);
+  addLog(
+    session,
+    `resolution started for market ${marketId} — ${ACTIVE_AGENT_COUNT} agents initializing`,
+  );
 
   res.json({ marketId, status: 'started', wsUrl: `/oracle/ws/${marketId}` });
 
   // Run active agents concurrently (each has its own delay, simulating async data fetching)
   Promise.allSettled(
-    session.agents.map(agent => runAgent(session, agent, marketOutcome))
+    session.agents.map((agent) => runAgent(session, agent, marketOutcome)),
   ).then(() => {
     if (session.phase === 'collecting') {
       // Shouldn't happen normally, but handle edge case
@@ -1244,7 +1603,7 @@ app.post('/oracle/resolve/:marketId', async (req, res) => {
 // ── Utilities ──────────────────────────────────────────────────────────────────
 
 function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ── Start ──────────────────────────────────────────────────────────────────────
@@ -1257,6 +1616,10 @@ server.listen(PORT, () => {
   console.log(`  POST /oracle/resolve/:marketId   — trigger resolution`);
   console.log(`  GET  /oracle/status/:marketId    — resolution state`);
   console.log(`  GET  /oracle/agents              — registry info`);
-  console.log(`  Active agents: ${ACTIVE_AGENT_COUNT} (quorum ${quorumThreshold(ACTIVE_AGENT_COUNT)})`);
+  console.log(
+    `  Active agents: ${ACTIVE_AGENT_COUNT} (quorum ${quorumThreshold(
+      ACTIVE_AGENT_COUNT,
+    )})`,
+  );
   console.log(`\nOracle ready.\n`);
 });

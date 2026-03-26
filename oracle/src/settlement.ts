@@ -292,11 +292,9 @@ export async function deliverSettlementOnChain(
     return settlement.deliveredTx;
   }
 
-  if (settlement.payout === '0') {
-    // Loser — nothing to deliver. Claim still needs to happen to release the lock.
-    // Let the user trigger it themselves with a 0-payout message.
-    return null;
-  }
+  // Note: we intentionally deliver 0-payout claims for losers too.
+  // The claimPayoutFor call releases their locked collateral, making their
+  // remaining vault balance withdrawable again.
 
   const VAULT_ABI = [
     'function claimPayout(bytes32 marketId, uint256 amount, uint256 nonce, uint256 expiry, bytes calldata sig) external',

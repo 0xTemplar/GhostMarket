@@ -87,6 +87,7 @@ export const GHOST_VAULT_ABI = [
     inputs: [
       { name: 'marketId', type: 'bytes32' },
       { name: 'amount',   type: 'uint256' },
+      { name: 'side',     type: 'bool'    },
     ],
     outputs: [],
   },
@@ -150,11 +151,79 @@ export const GHOST_VAULT_ABI = [
     outputs: [{ name: '', type: 'uint256' }],
   },
   {
+    name: 'userSides',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'user',     type: 'address' },
+      { name: 'marketId', type: 'bytes32' },
+    ],
+    outputs: [{ name: '', type: 'bool' }],
+  },
+  {
+    name: 'finalYesPools',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'marketId', type: 'bytes32' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'finalNoPools',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'marketId', type: 'bytes32' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'isResolved',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'marketId', type: 'bytes32' }],
+    outputs: [{ name: '', type: 'bool' }],
+  },
+  {
+    name: 'resolvedOutcomes',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'marketId', type: 'bytes32' }],
+    outputs: [{ name: '', type: 'bool' }],
+  },
+  {
+    name: 'computeExpectedPayout',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'user',     type: 'address' },
+      { name: 'marketId', type: 'bytes32' },
+    ],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'reportOutcome',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'marketId',     type: 'bytes32' },
+      { name: 'outcome',      type: 'bool'    },
+      { name: 'finalYesPool', type: 'uint256' },
+      { name: 'finalNoPool',  type: 'uint256' },
+    ],
+    outputs: [],
+  },
+  {
     name: 'settlementSigner',
     type: 'function',
     stateMutability: 'view',
     inputs: [],
     outputs: [{ name: '', type: 'address' }],
+  },
+  {
+    name: 'MarketResolved',
+    type: 'event',
+    inputs: [
+      { name: 'marketId', type: 'bytes32', indexed: true  },
+      { name: 'outcome',  type: 'bool',    indexed: false },
+    ],
   },
   // ─── Events ─────────────────────────────────────────────────────────────────
   {
@@ -180,6 +249,7 @@ export const GHOST_VAULT_ABI = [
       { name: 'user',     type: 'address', indexed: true  },
       { name: 'marketId', type: 'bytes32', indexed: true  },
       { name: 'amount',   type: 'uint256', indexed: false },
+      { name: 'side',     type: 'bool',    indexed: false },
     ],
   },
   {
@@ -294,6 +364,33 @@ export async function readSettlementSigner(): Promise<`0x${string}` | null> {
 // ─── Write helpers ────────────────────────────────────────────────────────────
 
 /**
+ * Deposit FLOW into GhostVault.
+ *
+ * `deposit()` is payable — the FLOW to credit is sent as msg.value.
+ * Call this when the user's free vault balance is less than their intended stake.
+ *
+ * @param walletClient  viem WalletClient on Flow EVM.
+ * @param amountWei     Amount to deposit in wei (sent as tx value).
+ * @returns             Transaction hash.
+ */
+export async function depositToVault(
+  walletClient: WalletClient,
+  amountWei:    bigint,
+): Promise<`0x${string}`> {
+  const [account] = await walletClient.getAddresses();
+
+  const { request } = await publicClient.simulateContract({
+    address:      GHOST_VAULT_ADDRESS,
+    abi:          GHOST_VAULT_ABI,
+    functionName: 'deposit',
+    value:        amountWei,
+    account,
+  });
+
+  return walletClient.writeContract(request);
+}
+
+/**
  * Lock collateral on GhostVault (Flow EVM) before placing an encrypted bet
  * on GhostEAMM (Sepolia).  Must be called with a WalletClient connected to
  * Flow EVM (chain ID 545).
@@ -301,12 +398,14 @@ export async function readSettlementSigner(): Promise<`0x${string}` | null> {
  * @param walletClient  viem WalletClient on Flow EVM (from Privy embedded wallet).
  * @param marketId      GhostEAMM uint256 market ID.
  * @param amountWei     Exact stake in wei — must match the encrypted bet amount.
+ * @param side          true = YES position, false = NO position.
  * @returns             Transaction hash of the lockForBet call on Flow EVM.
  */
 export async function lockBetCollateral(
   walletClient: WalletClient,
   marketId:     number,
   amountWei:    bigint,
+  side:         boolean,
 ): Promise<`0x${string}`> {
   const [account] = await walletClient.getAddresses();
   const marketIdBytes32 = eammMarketIdToBytes32(marketId);
@@ -315,11 +414,46 @@ export async function lockBetCollateral(
     address:      GHOST_VAULT_ADDRESS,
     abi:          GHOST_VAULT_ABI,
     functionName: 'lockForBet',
-    args:         [marketIdBytes32, amountWei],
+    args:         [marketIdBytes32, amountWei, side],
     account,
   });
 
   return walletClient.writeContract(request);
+}
+
+/** Read the on-chain computed payout for a user+market (0 if not resolved or loser). */
+export async function readComputedPayout(
+  userAddress: `0x${string}`,
+  marketId:    number,
+): Promise<string> {
+  if (GHOST_VAULT_ADDRESS === '0x0000000000000000000000000000000000000000') return '0';
+  try {
+    const raw = await publicClient.readContract({
+      address:      GHOST_VAULT_ADDRESS,
+      abi:          GHOST_VAULT_ABI,
+      functionName: 'computeExpectedPayout',
+      args:         [userAddress, eammMarketIdToBytes32(marketId)],
+    });
+    return formatEther(raw as bigint);
+  } catch {
+    return '0';
+  }
+}
+
+/** Read whether the oracle has reported an outcome for a market. */
+export async function readIsMarketResolved(marketId: number): Promise<boolean> {
+  if (GHOST_VAULT_ADDRESS === '0x0000000000000000000000000000000000000000') return false;
+  try {
+    const raw = await publicClient.readContract({
+      address:      GHOST_VAULT_ADDRESS,
+      abi:          GHOST_VAULT_ABI,
+      functionName: 'isResolved',
+      args:         [eammMarketIdToBytes32(marketId)],
+    });
+    return raw as boolean;
+  } catch {
+    return false;
+  }
 }
 
 /**

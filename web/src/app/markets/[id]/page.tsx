@@ -24,7 +24,11 @@ import {
 import {
   readEammPositionHandles, readEammMarketMeta, isEammDeployed,
 } from '@/lib/flow/eamm';
-import { readLockedAmount } from '@/lib/flow/vault';
+import {
+  readLockedAmount, readComputedPayout, readIsMarketResolved,
+  GHOST_VAULT_ADDRESS, GHOST_VAULT_ABI, publicClient as flowPublicClient,
+  parseEther,
+} from '@/lib/flow/vault';
 import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -81,15 +85,15 @@ function OnChainActions({
   const [userPos, setUserPos] = useState<{ yes: string; no: string; claimed: boolean } | null>(null);
   const [refundEligible, setRefundEligible] = useState(false);
   const [shieldedPos, setShieldedPos] = useState<{
-    hasYes: boolean;
-    hasNo: boolean;
-    locked: string;   // FLOW locked as collateral in GhostVault
-    side: string;     // 'YES' | 'NO' | 'YES + NO'
+    hasYes: boolean; hasNo: boolean;
+    locked: string; side: string;
+    computedPayout: string;   // on-chain Option B payout (0 = loser or unresolved)
+    vaultResolved: boolean;   // true if oracle has reported outcome to GhostVault
   } | null>(null);
   const [actionState, setActionState] = useState<
     | { phase: 'idle' }
     | { phase: 'loading' }
-    | { phase: 'success'; hash: string }
+    | { phase: 'success'; hash: string; label?: string }
     | { phase: 'error'; msg: string }
   >({ phase: 'idle' });
   const legacyPublicEnabled = !isEammDeployed();
@@ -101,25 +105,21 @@ function OnChainActions({
       const addr = user.evmAddress as `0x${string}`;
       const zero = '0x' + '0'.repeat(64);
 
-      const [pos, eligible, handles, locked] = await Promise.all([
+      const [pos, eligible, handles, locked, computedPayout, vaultResolved] = await Promise.all([
         legacyPublicEnabled ? readUserPosition(raw.id, addr) : Promise.resolve(null),
         legacyPublicEnabled ? readIsRefundEligible(raw.id) : Promise.resolve(false),
         isEammDeployed()
           ? readEammPositionHandles(raw.id, addr).catch(() => null)
           : Promise.resolve(null),
-        isEammDeployed()
-          ? readLockedAmount(addr, raw.id)
-          : Promise.resolve('0'),
+        isEammDeployed() ? readLockedAmount(addr, raw.id)         : Promise.resolve('0'),
+        isEammDeployed() ? readComputedPayout(addr, raw.id)       : Promise.resolve('0'),
+        isEammDeployed() ? readIsMarketResolved(raw.id)           : Promise.resolve(false),
       ]);
 
       if (pos && legacyPublicEnabled) {
         setUserPos({
-          yes: pos.yesAmount > 0n
-            ? `YES: ${(Number(pos.yesAmount) / 1e18).toFixed(4)} FLOW`
-            : '',
-          no: pos.noAmount > 0n
-            ? `NO: ${(Number(pos.noAmount) / 1e18).toFixed(4)} FLOW`
-            : '',
+          yes: pos.yesAmount > 0n ? `YES: ${(Number(pos.yesAmount) / 1e18).toFixed(4)} FLOW` : '',
+          no:  pos.noAmount  > 0n ? `NO: ${(Number(pos.noAmount)  / 1e18).toFixed(4)} FLOW` : '',
           claimed: pos.claimed,
         });
       }
@@ -129,7 +129,13 @@ function OnChainActions({
         const hasNo  = handles.noHandle  !== zero;
         if (hasYes || hasNo) {
           const side = hasYes && hasNo ? 'YES + NO' : hasYes ? 'YES' : 'NO';
-          setShieldedPos({ hasYes, hasNo, locked, side });
+          setShieldedPos({ hasYes, hasNo, locked, side, computedPayout, vaultResolved });
+        } else if (parseFloat(locked) > 0) {
+          // Lock exists but no EAMM handle — position pending Sepolia confirmation
+          setShieldedPos({
+            hasYes: false, hasNo: false, locked, side: '?',
+            computedPayout, vaultResolved,
+          });
         }
       }
 
@@ -139,7 +145,12 @@ function OnChainActions({
     }
   }, [user.evmAddress, raw.id, legacyPublicEnabled]);
 
-  useEffect(() => { loadPosition(); }, [loadPosition]);
+  // Initial load + auto-refresh every 15s so settled positions surface without a manual refresh
+  useEffect(() => {
+    loadPosition();
+    const interval = setInterval(loadPosition, 15_000);
+    return () => clearInterval(interval);
+  }, [loadPosition]);
 
   const handleClaim = async () => {
     if (!walletClient) return;
@@ -149,18 +160,36 @@ function OnChainActions({
         raw.status === 1
           ? await claimWinnings(walletClient, raw.id)
           : await claimRefund(walletClient, raw.id);
-
-      const { publicClient } = await import('@/lib/flow/vault');
-      await publicClient.waitForTransactionReceipt({ hash });
-      setActionState({ phase: 'success', hash });
+      await flowPublicClient.waitForTransactionReceipt({ hash });
+      setActionState({ phase: 'success', hash, label: 'Claimed' });
       await loadPosition();
     } catch (err: unknown) {
-      const msg =
-        err instanceof Error
-          ? err.message.includes('User rejected')
-            ? 'Rejected.'
-            : err.message.slice(0, 120)
-          : 'Failed.';
+      const msg = err instanceof Error
+        ? err.message.includes('User rejected') ? 'Rejected.' : err.message.slice(0, 120)
+        : 'Failed.';
+      setActionState({ phase: 'error', msg });
+    }
+  };
+
+  const handleWithdraw = async (amountEther: string) => {
+    if (!walletClient || !user.evmAddress) return;
+    setActionState({ phase: 'loading' });
+    try {
+      const hash = await walletClient.writeContract({
+        address:      GHOST_VAULT_ADDRESS,
+        abi:          GHOST_VAULT_ABI,
+        functionName: 'withdraw',
+        args:         [parseEther(amountEther)],
+        account:      user.evmAddress as `0x${string}`,
+        chain:        undefined,
+      });
+      await flowPublicClient.waitForTransactionReceipt({ hash });
+      setActionState({ phase: 'success', hash, label: 'Withdrawn to wallet' });
+      await loadPosition();
+    } catch (err: unknown) {
+      const msg = err instanceof Error
+        ? err.message.includes('User rejected') ? 'Rejected.' : err.message.slice(0, 120)
+        : 'Failed.';
       setActionState({ phase: 'error', msg });
     }
   };
@@ -173,11 +202,36 @@ function OnChainActions({
     (raw.status === 1 || refundEligible) &&
     (userPos?.yes || userPos?.no);
 
+  // Shielded position settled: oracle credited vault, user can now withdraw
+  const shieldedSettled =
+    shieldedPos !== null &&
+    shieldedPos.vaultResolved &&
+    parseFloat(shieldedPos.locked) === 0;
+
+  // Shielded position awaiting settlement: vault resolved but lock not yet released
+  const shieldedPendingSettlement =
+    shieldedPos !== null &&
+    shieldedPos.vaultResolved &&
+    parseFloat(shieldedPos.locked) > 0;
+
+  const shieldedWon =
+    shieldedPendingSettlement &&
+    parseFloat(shieldedPos!.computedPayout) > 0;
+
   return (
     <div className="rounded-2xl border border-white/5 bg-slate-900 p-5 space-y-4">
-      <h3 className="text-sm font-semibold text-white">Your Position</h3>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-white">Your Position</h3>
+        <button
+          onClick={loadPosition}
+          className="text-slate-600 hover:text-slate-400 transition-colors"
+          title="Refresh position"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+        </button>
+      </div>
 
-      {posLoading ? (
+      {posLoading && !shieldedPos && !userPos ? (
         <div className="flex items-center gap-2 text-sm text-slate-500">
           <Loader2 className="h-4 w-4 animate-spin" />
           Loading…
@@ -199,30 +253,78 @@ function OnChainActions({
                   <span className="text-slate-300 font-mono">{userPos!.no}</span>
                 </div>
               )}
-              {userPos!.claimed && (
-                <p className="text-xs text-emerald-400">✓ Claimed</p>
-              )}
+              {userPos!.claimed && <p className="text-xs text-emerald-400">✓ Claimed</p>}
             </div>
           )}
 
           {/* Shielded position on GhostEAMM */}
-          {shieldedPos && (
-            <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-3 space-y-1.5">
+          {shieldedPos && !shieldedSettled && (
+            <div className={cn(
+              'rounded-lg border p-3 space-y-1.5',
+              shieldedPendingSettlement && shieldedWon
+                ? 'border-emerald-500/20 bg-emerald-500/5'
+                : shieldedPendingSettlement
+                ? 'border-rose-500/20 bg-rose-500/5'
+                : 'border-indigo-500/20 bg-indigo-500/5',
+            )}>
               <div className="flex items-center gap-2">
                 <Lock className="h-3.5 w-3.5 text-indigo-400" />
                 <span className="text-xs font-semibold text-indigo-400 uppercase tracking-wide">
-                  Shielded ({shieldedPos.side})
+                  Shielded {shieldedPos.side !== '?' ? `(${shieldedPos.side})` : ''}
                 </span>
               </div>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Bet amount is FHE-encrypted on the eAMM — exact size is private.
-              </p>
-              {parseFloat(shieldedPos.locked) > 0 && (
-                <div className="flex items-center gap-1.5 text-xs">
-                  <span className="text-slate-500">Collateral locked:</span>
-                  <span className="font-mono text-amber-400">{parseFloat(shieldedPos.locked).toFixed(4)} FLOW</span>
-                </div>
+
+              {shieldedPendingSettlement ? (
+                <>
+                  {shieldedWon ? (
+                    <p className="text-xs text-emerald-300 font-medium">
+                      You won! Oracle settling — payout{' '}
+                      <span className="font-mono font-bold">
+                        {parseFloat(shieldedPos.computedPayout).toFixed(4)} FLOW
+                      </span>{' '}
+                      will be credited to your vault.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-rose-300">
+                      Position resolved — oracle releasing your lock.
+                    </p>
+                  )}
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="text-slate-500">Collateral locked:</span>
+                    <span className="font-mono text-amber-400">
+                      {parseFloat(shieldedPos.locked).toFixed(4)} FLOW
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    Bet amount is FHE-encrypted on the eAMM — exact size is private.
+                  </p>
+                  {parseFloat(shieldedPos.locked) > 0 && (
+                    <div className="flex items-center gap-1.5 text-xs">
+                      <span className="text-slate-500">Collateral locked:</span>
+                      <span className="font-mono text-amber-400">
+                        {parseFloat(shieldedPos.locked).toFixed(4)} FLOW
+                      </span>
+                    </div>
+                  )}
+                </>
               )}
+            </div>
+          )}
+
+          {/* Settled: lock released, show withdraw CTA */}
+          {shieldedSettled && (
+            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                <span className="text-xs font-semibold text-emerald-300">Position Settled</span>
+              </div>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Your payout has been credited to your vault balance.
+                Withdraw to send FLOW to your wallet.
+              </p>
             </div>
           )}
         </div>
@@ -230,52 +332,58 @@ function OnChainActions({
         <p className="text-sm text-slate-500">No position yet.</p>
       )}
 
-      {canClaim && (
-        <div className="pt-2 border-t border-white/5">
-          {actionState.phase === 'success' ? (
-            <div className="space-y-2">
-              <p className="text-sm text-emerald-400">✓ Claimed successfully</p>
-              <a
-                href={`${FLOWSCAN}/tx/${actionState.hash}`}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
-              >
-                <ExternalLink className="h-3.5 w-3.5" />
-                View on Flowscan
-              </a>
-            </div>
-          ) : actionState.phase === 'error' ? (
-            <div className="space-y-2">
-              <p className="text-xs text-rose-400">{actionState.msg}</p>
-              <button
-                onClick={() => setActionState({ phase: 'idle' })}
-                className="text-xs text-slate-400 hover:text-white transition-colors flex items-center gap-1"
-              >
-                <RefreshCw className="h-3 w-3" />
-                Retry
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={handleClaim}
-              disabled={actionState.phase === 'loading'}
-              className="w-full h-10 rounded-lg bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 text-white text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
+      {/* Action buttons */}
+      <div className="pt-2 border-t border-white/5 space-y-2">
+        {actionState.phase === 'success' ? (
+          <div className="space-y-2">
+            <p className="text-sm text-emerald-400">✓ {actionState.label ?? 'Done'}</p>
+            <a
+              href={`${FLOWSCAN}/tx/${actionState.hash}`}
+              target="_blank" rel="noreferrer"
+              className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
             >
-              {actionState.phase === 'loading' ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Processing…
-                </>
-              ) : raw.status === 1 ? (
-                'Claim Winnings'
-              ) : (
-                'Claim Refund'
-              )}
+              <ExternalLink className="h-3.5 w-3.5" />
+              View on Flowscan
+            </a>
+          </div>
+        ) : actionState.phase === 'error' ? (
+          <div className="space-y-2">
+            <p className="text-xs text-rose-400">{actionState.msg}</p>
+            <button
+              onClick={() => setActionState({ phase: 'idle' })}
+              className="text-xs text-slate-400 hover:text-white transition-colors flex items-center gap-1"
+            >
+              <RefreshCw className="h-3 w-3" /> Retry
             </button>
-          )}
-        </div>
-      )}
+          </div>
+        ) : actionState.phase === 'loading' ? (
+          <div className="flex items-center gap-2 text-sm text-slate-400">
+            <Loader2 className="h-4 w-4 animate-spin" /> Processing…
+          </div>
+        ) : (
+          <>
+            {/* Legacy public-market claim */}
+            {canClaim && (
+              <button
+                onClick={handleClaim}
+                className="w-full h-10 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
+              >
+                {raw.status === 1 ? 'Claim Winnings' : 'Claim Refund'}
+              </button>
+            )}
+
+            {/* Shielded: withdraw payout from vault to wallet */}
+            {shieldedSettled && (
+              <button
+                onClick={() => handleWithdraw(shieldedPos?.computedPayout ?? '0')}
+                className="w-full h-10 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
+              >
+                Withdraw to Wallet
+              </button>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -645,15 +753,23 @@ export default function MarketDetailPage() {
                   </div>
                 ) : (
                   <div className="rounded-lg border border-white/10 bg-slate-800 p-4 text-center">
-                    <p className="text-sm text-slate-400">
-                      {market.status === 'resolved'
-                        ? `Market resolved — ${rawMarket?.outcome ? 'YES' : 'NO'} won.`
-                        : sepoliaClosed
-                        ? 'This market is already closed on Sepolia and no longer accepts orders.'
-                        : marketFullyPriced
-                        ? 'This market is fully priced at 0/100c, so no meaningful upside remains.'
-                        : 'This market is no longer accepting orders.'}
-                    </p>
+                    <div className="space-y-1">
+                      <p className="text-sm text-slate-400">
+                        {market.status === 'resolved'
+                          ? `Market resolved — ${rawMarket?.outcome ? 'YES' : 'NO'} won.`
+                          : sepoliaClosed
+                          ? 'This market is closed on Sepolia and no longer accepts orders.'
+                          : marketFullyPriced
+                          ? 'This market is fully priced at 0/100c, so no meaningful upside remains.'
+                          : 'This market is no longer accepting orders.'}
+                      </p>
+                      {market.status === 'resolved' && isEammDeployed() && (
+                        <p className="text-xs text-slate-500 leading-relaxed">
+                          Shielded bets are settled autonomously by the oracle.
+                          Check your position below — payouts are credited to your vault balance.
+                        </p>
+                      )}
+                    </div>
                   </div>
                 )}
 
