@@ -43,7 +43,7 @@ import { submitAttestation, recordEvidence, updateReputation, getAgentInfo, getA
 import { postERC8004Reputation }                       from './erc8004-client';
 import {
   markMarketFinalized, getOrComputeSettlement, deliverSettlementOnChain,
-  getMarketSettlements, registerCanonicalBetTxHash, getCanonicalBetTxHash,
+  getMarketSettlements, registerCanonicalBetTxHash, getCanonicalBetTxHash, listMarketParticipants,
 } from './settlement';
 import type {
   ResolutionSession, OracleAgent, LogEntry, WsMessage, AgentStatus, SettlementClaimResponse,
@@ -64,6 +64,8 @@ const ACTIVE_AGENT_COUNT = Math.max(1, Math.min(
   AGENT_DEFINITIONS.length,
   Number(process.env.ACTIVE_ORACLE_AGENTS ?? 4),
 ));
+const ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY =
+  (process.env.ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY ?? 'false').toLowerCase() === 'true';
 const quorumThreshold = (agentCount: number): number => Math.floor(agentCount / 2) + 1;
 
 app.use(cors());
@@ -411,7 +413,7 @@ async function finalizeResolution(session: ResolutionSession) {
 
   markMarketFinalized(session.marketId, outcome);
 
-  addLog(session, 'market FINALIZED — Lit Action settlement relay active (Phase 6)');
+  addLog(session, 'resolution finalized — oracle outcome sealed');
 
   broadcast(session.marketId, {
     type:     'finalized',
@@ -423,7 +425,24 @@ async function finalizeResolution(session: ResolutionSession) {
     },
   });
 
-  addLog(session, 'settlement relay ready — users can claim via /oracle/settle/:marketId');
+  patchSession(session, {
+    settlementRelay: {
+      status: ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY ? 'pending' : 'disabled',
+      totalUsers: 0,
+      processedUsers: 0,
+      relayedUsers: 0,
+      failedUsers: 0,
+      lastError: null,
+    },
+  });
+
+  if (ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY) {
+    addLog(session, 'post-finalize settlement sweep queued (autonomous relay mode)');
+  } else {
+    addLog(session, 'autonomous settlement relay disabled — users claim via /oracle/settle/:marketId');
+  }
+
+  void runAutonomousSettlementSweep(session);
 
   // ── Background: canonical Sepolia resolve, then mirror status to Flow ──────────
   patchSession(session, {
@@ -467,7 +486,17 @@ async function finalizeResolution(session: ResolutionSession) {
   addLog(session, 'recording evidence CID in OracleAgentRegistry (background)...');
 
   Promise.allSettled(
-    votingAgents.map(agent => recordEvidence(agent.id, session.marketId, finalEvidenceCid)),
+    votingAgents.map(async (agent) => {
+      const txHash = await recordEvidence(agent.id, session.marketId, finalEvidenceCid);
+      if (txHash) {
+        patchSession(session, { calibrationTxHash: txHash });
+        addLog(session, `OracleAgentRegistry updated for agent-${agent.id}`, {
+          agentName: agent.name,
+          txHash,
+        });
+      }
+      return txHash;
+    }),
   ).then((results) => {
     const txHash = results
       .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled' && !!r.value)
@@ -509,11 +538,17 @@ async function finalizeResolution(session: ResolutionSession) {
       let repCid = '';
       try {
         repCid = await uploadToFilecoin(repSnapshot, `agent-${agent.id}-rep-snapshot`);
-        await updateReputation(agent.id, repCid, newScore);
+        const repTxHash = await updateReputation(agent.id, repCid, newScore);
         addLog(session, `agent-${agent.id} rep → Filecoin CID: ${repCid.slice(0, 20)}...`, {
           agentName: agent.name,
           cid:       repCid,
         });
+        if (repTxHash) {
+          addLog(session, `reputation updated on Calibration for agent-${agent.id}`, {
+            agentName: agent.name,
+            txHash: repTxHash,
+          });
+        }
       } catch (err) {
         console.warn(`[Synapse] Rep snapshot for agent ${agent.id} failed:`, (err as Error).message);
       }
@@ -534,6 +569,100 @@ async function finalizeResolution(session: ResolutionSession) {
   ).then(() => {
     addLog(session, 'all reputation snapshots uploaded to Filecoin');
   });
+}
+
+async function runAutonomousSettlementSweep(session: ResolutionSession): Promise<void> {
+  if (!ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY) return;
+  if (session.phase !== 'finalized') return;
+
+  try {
+    const users = await listMarketParticipants(session.marketId);
+    patchSession(session, {
+      settlementRelay: {
+        ...session.settlementRelay,
+        status: 'running',
+        totalUsers: users.length,
+      },
+    });
+
+    if (users.length === 0) {
+      addLog(session, 'settlement sweep found no registered participants for this market');
+      patchSession(session, {
+        settlementRelay: {
+          ...session.settlementRelay,
+          status: 'completed',
+        },
+      });
+      return;
+    }
+
+    addLog(session, `settlement sweep started for ${users.length} participant(s)`);
+
+    let processedUsers = 0;
+    let relayedUsers = 0;
+    let failedUsers = 0;
+
+    for (const userAddress of users) {
+      try {
+        const settlement = await getOrComputeSettlement(session.marketId, userAddress);
+        const txHash = await deliverSettlementOnChain(settlement);
+        processedUsers += 1;
+
+        if (txHash) {
+          relayedUsers += 1;
+          patchSession(session, { flowTxHash: txHash });
+          addLog(session, `settlement relayed for ${userAddress}`, { txHash });
+          broadcast(session.marketId, {
+            type: 'settlement_delivered',
+            marketId: session.marketId,
+            payload: { userAddress, txHash },
+          });
+        } else {
+          addLog(session, `settlement prepared for ${userAddress} (no relay tx sent)`);
+        }
+      } catch (err) {
+        processedUsers += 1;
+        failedUsers += 1;
+        const message = (err as Error).message ?? 'unknown settlement error';
+        addLog(session, `settlement sweep failed for ${userAddress}: ${message}`);
+      }
+
+      patchSession(session, {
+        settlementRelay: {
+          ...session.settlementRelay,
+          status: 'running',
+          processedUsers,
+          relayedUsers,
+          failedUsers,
+        },
+      });
+    }
+
+    patchSession(session, {
+      settlementRelay: {
+        ...session.settlementRelay,
+        status: failedUsers > 0 ? 'failed' : 'completed',
+        processedUsers,
+        relayedUsers,
+        failedUsers,
+      },
+    });
+    addLog(
+      session,
+      `settlement sweep ${failedUsers > 0 ? 'completed with failures' : 'completed'} ` +
+      `(${relayedUsers}/${processedUsers} relayed)`,
+    );
+  } catch (err) {
+    const message = (err as Error).message ?? 'unknown sweep error';
+    patchSession(session, {
+      settlementRelay: {
+        ...session.settlementRelay,
+        status: 'failed',
+        lastError: message,
+      },
+    });
+    addLog(session, `settlement sweep failed to start: ${message}`);
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1089,6 +1218,14 @@ app.post('/oracle/resolve/:marketId', async (req, res) => {
     flowTxHash:      null,
     sepoliaResolutionSync: { status: 'idle', txHash: null },
     flowResolutionSync: { status: 'idle', txHash: null },
+    settlementRelay: {
+      status: 'idle',
+      totalUsers: 0,
+      processedUsers: 0,
+      relayedUsers: 0,
+      failedUsers: 0,
+      lastError: null,
+    },
     startedAt:       Date.now(),
     finalizedAt:     null,
     log:             [],

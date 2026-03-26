@@ -45,6 +45,7 @@ const LIT_PKP_PUBLIC_KEY    = process.env.LIT_PKP_PUBLIC_KEY   ?? '';
 const LIT_PKP_ETH_ADDRESS   = process.env.LIT_PKP_ETH_ADDRESS  ?? '';
 const LIT_ACTION_IPFS_CID   = process.env.LIT_ACTION_IPFS_CID  ?? '';
 const LIT_ACTION_MODE       = (process.env.LIT_ACTION_MODE ?? 'safe').toLowerCase();
+const SETTLEMENT_SIGNATURE_MODE = (process.env.SETTLEMENT_SIGNATURE_MODE ?? 'eip191').toLowerCase();
 
 // Auth storage path for session caching between oracle invocations
 const LIT_STORAGE_PATH      = process.env.LIT_STORAGE_PATH     ?? './lit-auth-storage';
@@ -91,7 +92,17 @@ async function getVaultSettlementSigner(): Promise<string> {
   return String(signer);
 }
 
-// ── Signing helper (must exactly match GhostVault._recoverSigner) ─────────────
+// ── EIP-712 signing helpers (must match GhostVault CLAIM_TYPEHASH) ────────────
+
+const CLAIM_TYPES = {
+  Claim: [
+    { name: 'user', type: 'address' },
+    { name: 'marketId', type: 'bytes32' },
+    { name: 'amount', type: 'uint256' },
+    { name: 'nonce', type: 'uint256' },
+    { name: 'expiry', type: 'uint256' },
+  ],
+};
 
 export async function buildSettlementSignature(
   signer:          ethers.Wallet,
@@ -101,14 +112,31 @@ export async function buildSettlementSignature(
   nonce:           bigint,
   expiry:          bigint,
   vaultAddress:    string,
+  chainId:         bigint,
 ): Promise<string> {
-  const inner = ethers.keccak256(
-    ethers.AbiCoder.defaultAbiCoder().encode(
-      ['address', 'bytes32', 'uint256', 'uint256', 'uint256', 'address'],
-      [user, marketIdBytes32, payout, nonce, expiry, vaultAddress],
-    ),
-  );
-  return signer.signMessage(ethers.getBytes(inner));
+  if (SETTLEMENT_SIGNATURE_MODE !== 'eip712') {
+    const inner = ethers.keccak256(
+      ethers.AbiCoder.defaultAbiCoder().encode(
+        ['address', 'bytes32', 'uint256', 'uint256', 'uint256', 'address'],
+        [user, marketIdBytes32, payout, nonce, expiry, vaultAddress],
+      ),
+    );
+    return signer.signMessage(ethers.getBytes(inner));
+  }
+
+  const domain = {
+    name: 'GhostVault',
+    version: '1',
+    chainId,
+    verifyingContract: vaultAddress,
+  };
+  return signer.signTypedData(domain, CLAIM_TYPES, {
+    user,
+    marketId: marketIdBytes32,
+    amount: payout,
+    nonce,
+    expiry,
+  });
 }
 
 // How many blocks back to search for BetPlaced events.
@@ -358,22 +386,43 @@ async function signViaLitAction(input: SettlementSignInput): Promise<SettlementS
     await readOnChainSettlementData(input);
   const payout = computePayout(outcome, userSide, lockedAmount, totalYesPool, totalNoPool);
 
-  // Must exactly match GhostVault._recoverSigner.
-  // signMessage(innerHashBytes) == EIP-191 hash of 32-byte inner keccak.
-  const innerHash = ethers.keccak256(
-    ethers.AbiCoder.defaultAbiCoder().encode(
-      ['address', 'bytes32', 'uint256', 'uint256', 'uint256', 'address'],
-      [
-        input.userAddress,
-        input.marketIdBytes32,
-        payout,
-        BigInt(input.nonce),
-        BigInt(input.expiry),
-        GHOST_VAULT_ADDRESS,
-      ],
-    ),
-  );
-  const toSign = ethers.hashMessage(ethers.getBytes(innerHash));
+  // Must exactly match GhostVault EIP-712 domain + CLAIM_TYPEHASH.
+  const flowProvider = new ethers.JsonRpcProvider(FLOW_RPC_URL);
+  const flowNetwork = await flowProvider.getNetwork();
+  const toSign = SETTLEMENT_SIGNATURE_MODE === 'eip712'
+    ? ethers.TypedDataEncoder.hash(
+      {
+        name: 'GhostVault',
+        version: '1',
+        chainId: flowNetwork.chainId,
+        verifyingContract: GHOST_VAULT_ADDRESS,
+      },
+      CLAIM_TYPES,
+      {
+        user: input.userAddress,
+        marketId: input.marketIdBytes32,
+        amount: payout,
+        nonce: BigInt(input.nonce),
+        expiry: BigInt(input.expiry),
+      },
+    )
+    : ethers.hashMessage(
+      ethers.getBytes(
+        ethers.keccak256(
+          ethers.AbiCoder.defaultAbiCoder().encode(
+            ['address', 'bytes32', 'uint256', 'uint256', 'uint256', 'address'],
+            [
+              input.userAddress,
+              input.marketIdBytes32,
+              payout,
+              BigInt(input.nonce),
+              BigInt(input.expiry),
+              GHOST_VAULT_ADDRESS,
+            ],
+          ),
+        ),
+      ),
+    );
 
   // Optional strict mode: Lit Action re-checks resolution + bet log + lock state
   // before signing. Falls back to safe mode when required strict inputs are absent.
@@ -495,6 +544,7 @@ async function signViaDeployerKey(input: SettlementSignInput): Promise<Settlemen
     BigInt(input.nonce),
     BigInt(input.expiry),
     GHOST_VAULT_ADDRESS,
+    (await new ethers.JsonRpcProvider(FLOW_RPC_URL).getNetwork()).chainId,
   );
 
   return {

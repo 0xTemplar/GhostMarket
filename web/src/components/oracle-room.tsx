@@ -3,8 +3,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Check, CircleDashed, Clock, Copy, Database, ExternalLink,
-  Fingerprint, Loader2, Radio, Shield, Zap, Activity,
+  Check,
+  CircleDashed,
+  Clock,
+  Copy,
+  Database,
+  ExternalLink,
+  Fingerprint,
+  Loader2,
+  Radio,
+  Shield,
+  Zap,
+  Activity,
 } from 'lucide-react';
 import {
   getOracleSession,
@@ -15,18 +25,36 @@ import {
 } from '@/lib/oracle-client';
 import { cn } from '@/lib/utils';
 
-const ORACLE_HTTP_BASE = process.env.NEXT_PUBLIC_ORACLE_URL ?? 'http://localhost:8092';
+const ORACLE_HTTP_BASE =
+  process.env.NEXT_PUBLIC_ORACLE_URL ?? 'http://localhost:8092';
 const CALIBRATION_EXPLORER_TX_BASE =
-  process.env.NEXT_PUBLIC_CALIBRATION_EXPLORER_TX_BASE ?? 'https://calibration.filscan.io/tx/';
+  process.env.NEXT_PUBLIC_CALIBRATION_EXPLORER_TX_BASE ??
+  'https://calibration.filscan.io/tx/';
 
 type WsMessage =
   | { type: 'session_init'; marketId: string; payload: OracleSession }
   | { type: 'session_patch'; marketId: string; payload: Partial<OracleSession> }
   | { type: 'agent_update'; marketId: string; payload: OracleAgentView }
   | { type: 'log'; marketId: string; payload: OracleLogEntry }
-  | { type: 'quorum_reached'; marketId: string; payload: { yesVotes: number; noVotes: number; outcome: boolean } }
-  | { type: 'finalized'; marketId: string; payload: { outcome: boolean; finalEvidenceCid: string | null; calibrationTxHash: string | null } }
-  | { type: 'settlement_delivered'; marketId: string; payload: { userAddress?: string; txHash?: string; payout?: string } }
+  | {
+      type: 'quorum_reached';
+      marketId: string;
+      payload: { yesVotes: number; noVotes: number; outcome: boolean };
+    }
+  | {
+      type: 'finalized';
+      marketId: string;
+      payload: {
+        outcome: boolean;
+        finalEvidenceCid: string | null;
+        calibrationTxHash: string | null;
+      };
+    }
+  | {
+      type: 'settlement_delivered';
+      marketId: string;
+      payload: { userAddress?: string; txHash?: string; payout?: string };
+    }
   | { type: 'error'; marketId: string; payload: unknown };
 
 // ── utilities ─────────────────────────────────────────────────────────────────
@@ -41,7 +69,9 @@ function wsUrlForMarket(marketId: string): string {
   return `${base}/oracle/ws/${marketId}`;
 }
 
-function normalizeSessionPayload(payload: Record<string, unknown>): OracleSession {
+function normalizeSessionPayload(
+  payload: Record<string, unknown>,
+): OracleSession {
   return {
     marketId: String(payload.marketId ?? ''),
     phase: String(payload.phase ?? 'pending') as OracleSession['phase'],
@@ -51,7 +81,9 @@ function normalizeSessionPayload(payload: Record<string, unknown>): OracleSessio
         id: Number(agent.id ?? 0),
         name: String(agent.name ?? ''),
         walletAddress: String(agent.walletAddress ?? ''),
-        reputationScore: Number(agent.reputationScore ?? agent.reputation ?? 80),
+        reputationScore: Number(
+          agent.reputationScore ?? agent.reputation ?? 80,
+        ),
         erc8004Id: agent.erc8004Id ? String(agent.erc8004Id) : null,
         status: String(agent.status ?? 'idle') as OracleAgentView['status'],
         vote: typeof agent.vote === 'boolean' ? agent.vote : null,
@@ -65,25 +97,38 @@ function normalizeSessionPayload(payload: Record<string, unknown>): OracleSessio
     yesVotes: Number(payload.yesVotes ?? 0),
     noVotes: Number(payload.noVotes ?? 0),
     outcome: typeof payload.outcome === 'boolean' ? payload.outcome : null,
-    finalEvidenceCid: payload.finalEvidenceCid ? String(payload.finalEvidenceCid) : null,
+    finalEvidenceCid: payload.finalEvidenceCid
+      ? String(payload.finalEvidenceCid)
+      : null,
     calibrationTxHash: payload.calibrationTxHash
       ? String(payload.calibrationTxHash)
       : payload.calibrationTx
-      ? String(payload.calibrationTx)
-      : null,
+        ? String(payload.calibrationTx)
+        : null,
     flowTxHash: payload.flowTxHash
       ? String(payload.flowTxHash)
       : payload.flowTx
-      ? String(payload.flowTx)
-      : null,
-    sepoliaResolutionSync: (payload.sepoliaResolutionSync as OracleSession['sepoliaResolutionSync']) ?? {
-      status: 'idle',
-      txHash: null,
-    },
-    flowResolutionSync: (payload.flowResolutionSync as OracleSession['flowResolutionSync']) ?? {
-      status: 'idle',
-      txHash: null,
-    },
+        ? String(payload.flowTx)
+        : null,
+    sepoliaResolutionSync:
+      (payload.sepoliaResolutionSync as OracleSession['sepoliaResolutionSync']) ?? {
+        status: 'idle',
+        txHash: null,
+      },
+    flowResolutionSync:
+      (payload.flowResolutionSync as OracleSession['flowResolutionSync']) ?? {
+        status: 'idle',
+        txHash: null,
+      },
+    settlementRelay:
+      (payload.settlementRelay as OracleSession['settlementRelay']) ?? {
+        status: 'idle',
+        totalUsers: 0,
+        processedUsers: 0,
+        relayedUsers: 0,
+        failedUsers: 0,
+        lastError: null,
+      },
     startedAt: Number(payload.startedAt ?? Date.now()),
     finalizedAt: payload.finalizedAt ? Number(payload.finalizedAt) : null,
     log: (Array.isArray(payload.log) ? payload.log : []).map((l) => {
@@ -93,8 +138,8 @@ function normalizeSessionPayload(payload: Record<string, unknown>): OracleSessio
         agentName: entry.agentName
           ? String(entry.agentName)
           : entry.agent
-          ? String(entry.agent)
-          : null,
+            ? String(entry.agent)
+            : null,
         message: String(entry.message ?? ''),
         txHash: entry.txHash ? String(entry.txHash) : null,
         cid: entry.cid ? String(entry.cid) : null,
@@ -110,7 +155,10 @@ function quorumThreshold(agentCount: number): number {
 function useElapsedTime(startedAt: number | null | undefined): string {
   const [elapsed, setElapsed] = useState('');
   useEffect(() => {
-    if (!startedAt) { setElapsed(''); return; }
+    if (!startedAt) {
+      setElapsed('');
+      return;
+    }
     const update = () => {
       const s = Math.floor((Date.now() - startedAt) / 1000);
       const m = Math.floor(s / 60);
@@ -138,28 +186,56 @@ function useCopyToClipboard() {
 // ── design tokens ─────────────────────────────────────────────────────────────
 
 const PHASE_CFG: Record<string, { label: string; cls: string; dot: string }> = {
-  idle:          { label: 'Idle',         cls: 'text-slate-400 border-slate-600/40 bg-slate-800/60',        dot: 'bg-slate-500' },
-  pending:       { label: 'Pending',      cls: 'text-slate-400 border-slate-600/40 bg-slate-800/60',        dot: 'bg-slate-500' },
-  collecting:    { label: 'Collecting',   cls: 'text-blue-300 border-blue-500/40 bg-blue-950/40',           dot: 'bg-blue-400 animate-pulse' },
-  quorum_reached:{ label: 'Quorum',       cls: 'text-amber-300 border-amber-500/40 bg-amber-950/40',        dot: 'bg-amber-400 animate-pulse' },
-  uploading:     { label: 'Uploading',    cls: 'text-violet-300 border-violet-500/40 bg-violet-950/40',     dot: 'bg-violet-400 animate-pulse' },
-  finalized:     { label: 'Finalized',    cls: 'text-emerald-300 border-emerald-500/40 bg-emerald-950/40',  dot: 'bg-emerald-400' },
-  failed:        { label: 'Failed',       cls: 'text-rose-300 border-rose-500/40 bg-rose-950/40',           dot: 'bg-rose-400' },
+  idle: {
+    label: 'Idle',
+    cls: 'text-slate-400 border-slate-600/40 bg-slate-800/60',
+    dot: 'bg-slate-500',
+  },
+  pending: {
+    label: 'Pending',
+    cls: 'text-slate-400 border-slate-600/40 bg-slate-800/60',
+    dot: 'bg-slate-500',
+  },
+  collecting: {
+    label: 'Collecting',
+    cls: 'text-blue-300 border-blue-500/40 bg-blue-950/40',
+    dot: 'bg-blue-400 animate-pulse',
+  },
+  quorum_reached: {
+    label: 'Quorum',
+    cls: 'text-amber-300 border-amber-500/40 bg-amber-950/40',
+    dot: 'bg-amber-400 animate-pulse',
+  },
+  uploading: {
+    label: 'Uploading',
+    cls: 'text-violet-300 border-violet-500/40 bg-violet-950/40',
+    dot: 'bg-violet-400 animate-pulse',
+  },
+  finalized: {
+    label: 'Resolution Finalized',
+    cls: 'text-emerald-300 border-emerald-500/40 bg-emerald-950/40',
+    dot: 'bg-emerald-400',
+  },
+  failed: {
+    label: 'Failed',
+    cls: 'text-rose-300 border-rose-500/40 bg-rose-950/40',
+    dot: 'bg-rose-400',
+  },
 };
 
 const AGENT_STATUS_CFG: Record<string, { color: string }> = {
-  idle:      { color: 'text-slate-500' },
-  fetching:  { color: 'text-sky-400' },
+  idle: { color: 'text-slate-500' },
+  fetching: { color: 'text-sky-400' },
   attesting: { color: 'text-amber-400' },
   submitted: { color: 'text-emerald-400' },
-  slashed:   { color: 'text-rose-400' },
+  slashed: { color: 'text-rose-400' },
   suspended: { color: 'text-orange-400' },
 };
 
 const AGENT_SOURCE: Record<string, string> = {
-  Cipher:  'Binance',
+  Cipher: 'Binance',
   Specter: 'CoinGecko',
-  Wraith:  'Chainlink',
+  Wraith: 'Chainlink',
   Phantom: 'Coinbase',
 };
 
@@ -168,10 +244,12 @@ const AGENT_SOURCE: Record<string, string> = {
 function PhasePill({ phase }: { phase: string }) {
   const cfg = PHASE_CFG[phase] ?? PHASE_CFG.idle;
   return (
-    <span className={cn(
-      'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold tracking-widest uppercase',
-      cfg.cls,
-    )}>
+    <span
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold tracking-widest uppercase',
+        cfg.cls,
+      )}
+    >
       <span className={cn('h-1.5 w-1.5 rounded-full', cfg.dot)} />
       {cfg.label}
     </span>
@@ -187,12 +265,14 @@ function VoteBadge({ vote }: { vote: boolean | null }) {
     );
   }
   return (
-    <span className={cn(
-      'rounded border px-2.5 py-0.5 font-mono text-[11px] font-bold tracking-widest',
-      vote
-        ? 'border-emerald-500/40 bg-emerald-950/50 text-emerald-300'
-        : 'border-rose-500/40 bg-rose-950/50 text-rose-300',
-    )}>
+    <span
+      className={cn(
+        'rounded border px-2.5 py-0.5 font-mono text-[11px] font-bold tracking-widest',
+        vote
+          ? 'border-emerald-500/40 bg-emerald-950/50 text-emerald-300'
+          : 'border-rose-500/40 bg-rose-950/50 text-rose-300',
+      )}
+    >
       {vote ? 'YES' : 'NO'}
     </span>
   );
@@ -229,7 +309,9 @@ function AgentCard({ agent }: { agent: OracleAgentView }) {
       <div className="relative flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="truncate font-semibold text-white">{agent.name}</span>
+            <span className="truncate font-semibold text-white">
+              {agent.name}
+            </span>
             {AGENT_SOURCE[agent.name] && (
               <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[9px] tracking-wide text-slate-400 uppercase">
                 {AGENT_SOURCE[agent.name]}
@@ -239,7 +321,9 @@ function AgentCard({ agent }: { agent: OracleAgentView }) {
           <div className="mt-0.5 font-mono text-[9px] text-slate-700">
             agent #{agent.id}
             {agent.reputationScore != null && (
-              <span className="ml-2 text-slate-600">rep {agent.reputationScore}</span>
+              <span className="ml-2 text-slate-600">
+                rep {agent.reputationScore}
+              </span>
             )}
           </div>
         </div>
@@ -269,33 +353,78 @@ function AgentCard({ agent }: { agent: OracleAgentView }) {
       {/* CID strip */}
       {agent.storachaCid && agent.storachaCid !== 'not-configured' && (
         <div className="relative mt-2.5 rounded-md border border-white/5 bg-slate-950/80 px-2.5 py-1.5">
-          <span className="font-mono text-[9px] text-slate-600 uppercase tracking-wider">storacha </span>
-          <span className="font-mono text-[10px] text-slate-400">{shorten(agent.storachaCid, 14, 10)}</span>
+          <span className="font-mono text-[9px] text-slate-600 uppercase tracking-wider">
+            storacha{' '}
+          </span>
+          <span className="font-mono text-[10px] text-slate-400">
+            {shorten(agent.storachaCid, 14, 10)}
+          </span>
         </div>
       )}
       {agent.reasoning && (
         <div className="relative mt-2 rounded-md border border-white/5 bg-slate-950/70 px-2.5 py-1.5">
-          <span className="font-mono text-[9px] text-slate-600 uppercase tracking-wider">reasoning </span>
-          <span className="line-clamp-2 text-[10px] text-slate-300">{agent.reasoning}</span>
+          <span className="font-mono text-[9px] text-slate-600 uppercase tracking-wider">
+            reasoning{' '}
+          </span>
+          <span className="line-clamp-2 text-[10px] text-slate-300">
+            {agent.reasoning}
+          </span>
         </div>
       )}
     </motion.div>
   );
 }
 
-function classifyLog(entry: OracleLogEntry): { color: string; bg: string; prefix: string } {
+function classifyLog(entry: OracleLogEntry): {
+  color: string;
+  bg: string;
+  prefix: string;
+} {
   const m = entry.message.toLowerCase();
-  if (entry.txHash || m.includes('registry') || m.includes('calibration') || m.includes('on-chain')) {
+  if (
+    entry.txHash ||
+    m.includes('registry') ||
+    m.includes('calibration') ||
+    m.includes('on-chain')
+  ) {
     return { color: 'text-cyan-300', bg: 'text-cyan-700/60', prefix: 'CHAIN' };
   }
-  if (m.includes('settlement') || m.includes('claim') || m.includes('payout') || m.includes('relay')) {
-    return { color: 'text-amber-300', bg: 'text-amber-700/60', prefix: 'SETTLE' };
+  if (
+    m.includes('settlement') ||
+    m.includes('claim') ||
+    m.includes('payout') ||
+    m.includes('relay')
+  ) {
+    return {
+      color: 'text-amber-300',
+      bg: 'text-amber-700/60',
+      prefix: 'SETTLE',
+    };
   }
-  if (m.includes('cid') || m.includes('storacha') || m.includes('filecoin') || m.includes('piece') || m.includes('reputation') || entry.cid) {
-    return { color: 'text-violet-300', bg: 'text-violet-700/60', prefix: 'PROOF' };
+  if (
+    m.includes('cid') ||
+    m.includes('storacha') ||
+    m.includes('filecoin') ||
+    m.includes('piece') ||
+    m.includes('reputation') ||
+    entry.cid
+  ) {
+    return {
+      color: 'text-violet-300',
+      bg: 'text-violet-700/60',
+      prefix: 'PROOF',
+    };
   }
-  if (m.includes('finalized') || m.includes('quorum') || m.includes('resolved')) {
-    return { color: 'text-emerald-300', bg: 'text-emerald-700/60', prefix: 'SYS' };
+  if (
+    m.includes('finalized') ||
+    m.includes('quorum') ||
+    m.includes('resolved')
+  ) {
+    return {
+      color: 'text-emerald-300',
+      bg: 'text-emerald-700/60',
+      prefix: 'SYS',
+    };
   }
   if (m.includes('error') || m.includes('failed') || m.includes('fail')) {
     return { color: 'text-rose-300', bg: 'text-rose-700/60', prefix: 'ERR' };
@@ -310,10 +439,16 @@ function LogRow({ entry }: { entry: OracleLogEntry }) {
   const { color, bg, prefix } = classifyLog(entry);
   return (
     <div className="grid grid-cols-[4rem_1fr] gap-3 border-b border-white/4 py-1.5 text-[11px]">
-      <span className={cn('pt-0.5 font-mono font-semibold tracking-widest', bg)}>{prefix}</span>
+      <span
+        className={cn('pt-0.5 font-mono font-semibold tracking-widest', bg)}
+      >
+        {prefix}
+      </span>
       <div>
         <div className="flex items-baseline justify-between gap-2">
-          <span className={cn('font-mono leading-relaxed', color)}>{entry.message}</span>
+          <span className={cn('font-mono leading-relaxed', color)}>
+            {entry.message}
+          </span>
           <span className="shrink-0 font-mono text-[9px] text-slate-700">
             {new Date(entry.ts).toLocaleTimeString()}
           </span>
@@ -321,10 +456,24 @@ function LogRow({ entry }: { entry: OracleLogEntry }) {
         {(entry.txHash || entry.cid) && (
           <div className="mt-0.5 flex flex-wrap gap-3">
             {entry.txHash && (
-              <span className="font-mono text-[9px] text-slate-600">tx:{shorten(entry.txHash, 8, 6)}</span>
+              <a
+                href={`${CALIBRATION_EXPLORER_TX_BASE}${entry.txHash}`}
+                target="_blank"
+                rel="noreferrer"
+                className="font-mono text-[9px] text-cyan-400 hover:text-cyan-300"
+              >
+                tx:{shorten(entry.txHash, 8, 6)}
+              </a>
             )}
             {entry.cid && (
-              <span className="font-mono text-[9px] text-slate-600">cid:{shorten(entry.cid, 12, 8)}</span>
+              <a
+                href={`https://filfox.info/en/search/${entry.cid}`}
+                target="_blank"
+                rel="noreferrer"
+                className="font-mono text-[9px] text-violet-400 hover:text-violet-300"
+              >
+                cid:{shorten(entry.cid, 12, 8)}
+              </a>
             )}
           </div>
         )}
@@ -334,7 +483,13 @@ function LogRow({ entry }: { entry: OracleLogEntry }) {
 }
 
 function HashRow({
-  label, icon: Icon, value, href, copyKey, copied, onCopy,
+  label,
+  icon: Icon,
+  value,
+  href,
+  copyKey,
+  copied,
+  onCopy,
 }: {
   label: string;
   icon: React.ElementType;
@@ -348,7 +503,9 @@ function HashRow({
     <div className="rounded-xl border border-white/6 bg-[#0a0f1e] p-3.5">
       <div className="mb-2 flex items-center gap-1.5">
         <Icon className="h-3 w-3 text-slate-600" />
-        <span className="font-mono text-[9px] font-semibold tracking-widest text-slate-600 uppercase">{label}</span>
+        <span className="font-mono text-[9px] font-semibold tracking-widest text-slate-600 uppercase">
+          {label}
+        </span>
       </div>
       {value ? (
         <div className="flex items-center gap-1.5">
@@ -357,14 +514,24 @@ function HashRow({
           </span>
           <div className="flex shrink-0 items-center gap-0.5">
             {href && (
-              <a href={href} target="_blank" rel="noreferrer" className="rounded p-1.5 hover:bg-white/5">
+              <a
+                href={href}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded p-1.5 hover:bg-white/5"
+              >
                 <ExternalLink className="h-3 w-3 text-slate-600 hover:text-slate-300" />
               </a>
             )}
-            <button onClick={() => onCopy(value, copyKey)} className="rounded p-1.5 hover:bg-white/5">
-              {copied === copyKey
-                ? <Check className="h-3 w-3 text-emerald-400" />
-                : <Copy className="h-3 w-3 text-slate-600 hover:text-slate-300" />}
+            <button
+              onClick={() => onCopy(value, copyKey)}
+              className="rounded p-1.5 hover:bg-white/5"
+            >
+              {copied === copyKey ? (
+                <Check className="h-3 w-3 text-emerald-400" />
+              ) : (
+                <Copy className="h-3 w-3 text-slate-600 hover:text-slate-300" />
+              )}
             </button>
           </div>
         </div>
@@ -384,7 +551,9 @@ export function OracleRoom() {
   const [resolving, setResolving] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [logFilter, setLogFilter] = useState<'all' | 'agent' | 'proof' | 'settle'>('all');
+  const [logFilter, setLogFilter] = useState<
+    'all' | 'agent' | 'proof' | 'settle'
+  >('all');
   const logRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const { copied, copy } = useCopyToClipboard();
@@ -414,23 +583,37 @@ export function OracleRoom() {
               const normalizedPatch: Partial<OracleAgentView> = {
                 id: Number(patch.id ?? 0),
                 name: String(patch.name ?? ''),
-                status: String(patch.status ?? 'idle') as OracleAgentView['status'],
+                status: String(
+                  patch.status ?? 'idle',
+                ) as OracleAgentView['status'],
                 vote: typeof patch.vote === 'boolean' ? patch.vote : null,
-                storachaCid: patch.storachaCid ? String(patch.storachaCid) : null,
-                filecoinCid: patch.filecoinCid ? String(patch.filecoinCid) : null,
+                storachaCid: patch.storachaCid
+                  ? String(patch.storachaCid)
+                  : null,
+                filecoinCid: patch.filecoinCid
+                  ? String(patch.filecoinCid)
+                  : null,
                 attestedAt: patch.attestedAt ? Number(patch.attestedAt) : null,
-                reputationScore: Number(patch.reputationScore ?? patch.reputation ?? 80),
-                reasoning: patch.reasoning ? String(patch.reasoning) : undefined,
+                reputationScore: Number(
+                  patch.reputationScore ?? patch.reputation ?? 80,
+                ),
+                reasoning: patch.reasoning
+                  ? String(patch.reasoning)
+                  : undefined,
                 source: patch.source ? String(patch.source) : undefined,
               };
-              const agents = prev.agents.map((a) => a.id === normalizedPatch.id ? { ...a, ...normalizedPatch } : a);
+              const agents = prev.agents.map((a) =>
+                a.id === normalizedPatch.id ? { ...a, ...normalizedPatch } : a,
+              );
               return { ...prev, agents };
             }
             case 'session_patch':
               return { ...prev, ...msg.payload };
-            case 'log':
-              {
-                const logPayload = msg.payload as unknown as Record<string, unknown>;
+            case 'log': {
+              const logPayload = msg.payload as unknown as Record<
+                string,
+                unknown
+              >;
               return {
                 ...prev,
                 log: [
@@ -440,56 +623,72 @@ export function OracleRoom() {
                     agentName: logPayload.agentName
                       ? String(logPayload.agentName)
                       : logPayload.agent
-                      ? String(logPayload.agent)
-                      : null,
+                        ? String(logPayload.agent)
+                        : null,
                     message: String(logPayload.message ?? ''),
                     txHash: logPayload.txHash
                       ? String(logPayload.txHash)
                       : null,
-                    cid: logPayload.cid
-                      ? String(logPayload.cid)
-                      : null,
+                    cid: logPayload.cid ? String(logPayload.cid) : null,
                   } satisfies OracleLogEntry,
                 ],
               };
             }
-            case 'quorum_reached':
-              {
-                const quorumPayload = msg.payload as unknown as { yesVotes?: number; noVotes?: number; outcome?: boolean };
-                return {
-                  ...prev,
-                  phase: 'quorum_reached',
-                  yesVotes: Number(quorumPayload.yesVotes ?? prev.yesVotes),
-                  noVotes: Number(quorumPayload.noVotes ?? prev.noVotes),
-                  outcome: typeof quorumPayload.outcome === 'boolean' ? quorumPayload.outcome : prev.outcome,
-                };
-              }
-            case 'finalized':
-              {
-                const finalPayload = msg.payload as unknown as {
-                  outcome?: boolean;
-                  finalEvidenceCid?: string | null;
-                  calibrationTxHash?: string | null;
-                  calibrationTx?: string | null;
-                };
+            case 'quorum_reached': {
+              const quorumPayload = msg.payload as unknown as {
+                yesVotes?: number;
+                noVotes?: number;
+                outcome?: boolean;
+              };
+              return {
+                ...prev,
+                phase: 'quorum_reached',
+                yesVotes: Number(quorumPayload.yesVotes ?? prev.yesVotes),
+                noVotes: Number(quorumPayload.noVotes ?? prev.noVotes),
+                outcome:
+                  typeof quorumPayload.outcome === 'boolean'
+                    ? quorumPayload.outcome
+                    : prev.outcome,
+              };
+            }
+            case 'finalized': {
+              const finalPayload = msg.payload as unknown as {
+                outcome?: boolean;
+                finalEvidenceCid?: string | null;
+                calibrationTxHash?: string | null;
+                calibrationTx?: string | null;
+              };
               return {
                 ...prev,
                 phase: 'finalized',
-                outcome: typeof finalPayload.outcome === 'boolean' ? finalPayload.outcome : prev.outcome,
-                finalEvidenceCid: finalPayload.finalEvidenceCid ?? prev.finalEvidenceCid,
-                calibrationTxHash: finalPayload.calibrationTxHash ?? finalPayload.calibrationTx ?? prev.calibrationTxHash,
+                outcome:
+                  typeof finalPayload.outcome === 'boolean'
+                    ? finalPayload.outcome
+                    : prev.outcome,
+                finalEvidenceCid:
+                  finalPayload.finalEvidenceCid ?? prev.finalEvidenceCid,
+                calibrationTxHash:
+                  finalPayload.calibrationTxHash ??
+                  finalPayload.calibrationTx ??
+                  prev.calibrationTxHash,
               };
             }
-            case 'settlement_delivered':
-              {
-                const settlementPayload = msg.payload as unknown as { txHash?: string | null };
-                return { ...prev, flowTxHash: settlementPayload.txHash ?? prev.flowTxHash };
-              }
+            case 'settlement_delivered': {
+              const settlementPayload = msg.payload as unknown as {
+                txHash?: string | null;
+              };
+              return {
+                ...prev,
+                flowTxHash: settlementPayload.txHash ?? prev.flowTxHash,
+              };
+            }
             default:
               return prev;
           }
         });
-      } catch { /* ignore malformed frames */ }
+      } catch {
+        /* ignore malformed frames */
+      }
     };
   }, []);
 
@@ -523,7 +722,12 @@ export function OracleRoom() {
     }
   }, [marketId, connectWs]);
 
-  useEffect(() => () => { if (wsRef.current) wsRef.current.close(); }, []);
+  useEffect(
+    () => () => {
+      if (wsRef.current) wsRef.current.close();
+    },
+    [],
+  );
 
   // auto-scroll log
   useEffect(() => {
@@ -548,58 +752,115 @@ export function OracleRoom() {
       const { prefix } = classifyLog(e);
       if (logFilter === 'agent') return prefix === 'AGENT';
       if (logFilter === 'proof') return prefix === 'PROOF';
-      if (logFilter === 'settle') return prefix === 'SETTLE' || prefix === 'CHAIN';
+      if (logFilter === 'settle')
+        return prefix === 'SETTLE' || prefix === 'CHAIN';
       return true;
     });
   }, [session?.log, logFilter]);
 
-  const autonomousLogs = useMemo(() =>
-    (session?.log ?? []).filter((l) =>
-      l.message.includes('background') ||
-      l.message.includes('settlement relay') ||
-      l.message.includes('FINALIZED') ||
-      l.message.includes('Piece CID') ||
-      l.message.includes('reputation')
-    ), [session]);
+  const autonomousLogs = useMemo(
+    () =>
+      (session?.log ?? []).filter(
+        (l) =>
+          l.message.includes('background') ||
+          l.message.includes('settlement relay') ||
+          l.message.includes('settlement sweep') ||
+          l.message.includes('settlement prepared') ||
+          l.message.includes('settlement relayed') ||
+          l.message.includes('FINALIZED') ||
+          l.message.includes('resolution finalized') ||
+          l.message.includes('Piece CID') ||
+          l.message.includes('reputation'),
+      ),
+    [session],
+  );
+
+  const calibrationTxs = useMemo(() => {
+    const seen = new Set<string>();
+    const txs: string[] = [];
+    for (const e of session?.log ?? []) {
+      if (!e.txHash) continue;
+      const m = e.message.toLowerCase();
+      const looksCalibration =
+        m.includes('calibration') ||
+        m.includes('oracleagentregistry') ||
+        m.includes('attestation recorded') ||
+        m.includes('reputation updated');
+      if (!looksCalibration) continue;
+      if (seen.has(e.txHash)) continue;
+      seen.add(e.txHash);
+      txs.push(e.txHash);
+    }
+    return txs;
+  }, [session?.log]);
 
   const phase = session?.phase ?? 'idle';
   const isFinalized = phase === 'finalized';
-  const isLive = phase === 'collecting' || phase === 'quorum_reached' || phase === 'uploading';
-  const sepoliaSync = session?.sepoliaResolutionSync ?? { status: 'idle' as const, txHash: null };
-  const flowSync = session?.flowResolutionSync ?? { status: 'idle' as const, txHash: null };
+  const isLive =
+    phase === 'collecting' ||
+    phase === 'quorum_reached' ||
+    phase === 'uploading';
+  const sepoliaSync = session?.sepoliaResolutionSync ?? {
+    status: 'idle' as const,
+    txHash: null,
+  };
+  const flowSync = session?.flowResolutionSync ?? {
+    status: 'idle' as const,
+    txHash: null,
+  };
+  const settlementRelay = session?.settlementRelay ?? {
+    status: 'idle' as const,
+    totalUsers: 0,
+    processedUsers: 0,
+    relayedUsers: 0,
+    failedUsers: 0,
+    lastError: null,
+  };
 
   return (
     <div className="space-y-5">
-
       {/* ── Command Bar ─────────────────────────────────────────────────────── */}
-      <div className={cn(
-        'relative overflow-hidden rounded-2xl border bg-[#070c1a] p-5 transition-all duration-700',
-        isFinalized
-          ? 'border-emerald-500/20 shadow-emerald-500/5 shadow-xl'
-          : isLive
-            ? 'border-violet-500/20 shadow-violet-500/5 shadow-xl'
-            : 'border-white/8',
-      )}>
-        {/* background glow */}
-        <div className={cn(
-          'pointer-events-none absolute inset-0 opacity-20',
+      <div
+        className={cn(
+          'relative overflow-hidden rounded-2xl border bg-[#070c1a] p-5 transition-all duration-700',
           isFinalized
-            ? 'bg-linear-to-br from-emerald-950 via-transparent to-transparent'
-            : 'bg-linear-to-br from-violet-950 via-transparent to-transparent',
-        )} />
+            ? 'border-emerald-500/20 shadow-emerald-500/5 shadow-xl'
+            : isLive
+              ? 'border-violet-500/20 shadow-violet-500/5 shadow-xl'
+              : 'border-white/8',
+        )}
+      >
+        {/* background glow */}
+        <div
+          className={cn(
+            'pointer-events-none absolute inset-0 opacity-20',
+            isFinalized
+              ? 'bg-linear-to-br from-emerald-950 via-transparent to-transparent'
+              : 'bg-linear-to-br from-violet-950 via-transparent to-transparent',
+          )}
+        />
 
         <div className="relative flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2.5">
-            <div className={cn(
-              'flex h-8 w-8 items-center justify-center rounded-lg border',
-              isFinalized
-                ? 'border-emerald-500/30 bg-emerald-950/50'
-                : 'border-violet-500/30 bg-violet-950/50',
-            )}>
-              <Shield className={cn('h-4 w-4', isFinalized ? 'text-emerald-400' : 'text-violet-400')} />
+            <div
+              className={cn(
+                'flex h-8 w-8 items-center justify-center rounded-lg border',
+                isFinalized
+                  ? 'border-emerald-500/30 bg-emerald-950/50'
+                  : 'border-violet-500/30 bg-violet-950/50',
+              )}
+            >
+              <Shield
+                className={cn(
+                  'h-4 w-4',
+                  isFinalized ? 'text-emerald-400' : 'text-violet-400',
+                )}
+              />
             </div>
             <div>
-              <h1 className="text-base font-bold leading-none text-white">Oracle Room</h1>
+              <h1 className="text-base font-bold leading-none text-white">
+                Oracle Room
+              </h1>
               <div className="mt-0.5 font-mono text-[9px] text-slate-600 tracking-widest uppercase">
                 Decentralized Resolution Engine
               </div>
@@ -608,13 +869,17 @@ export function OracleRoom() {
 
           <PhasePill phase={phase} />
 
-          <span className={cn(
-            'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-mono',
-            wsConnected
-              ? 'border-emerald-500/30 bg-emerald-950/40 text-emerald-400'
-              : 'border-slate-700/50 bg-slate-900 text-slate-600',
-          )}>
-            <Radio className={cn('h-2.5 w-2.5', wsConnected && 'animate-pulse')} />
+          <span
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-mono',
+              wsConnected
+                ? 'border-emerald-500/30 bg-emerald-950/40 text-emerald-400'
+                : 'border-slate-700/50 bg-slate-900 text-slate-600',
+            )}
+          >
+            <Radio
+              className={cn('h-2.5 w-2.5', wsConnected && 'animate-pulse')}
+            />
             {wsConnected ? 'live' : 'disconnected'}
           </span>
 
@@ -635,7 +900,9 @@ export function OracleRoom() {
         {/* controls */}
         <div className="relative mt-5 flex flex-wrap items-end gap-3">
           <div className="flex flex-col gap-1">
-            <label className="font-mono text-[9px] tracking-widest text-slate-600 uppercase">Market ID</label>
+            <label className="font-mono text-[9px] tracking-widest text-slate-600 uppercase">
+              Market ID
+            </label>
             <input
               value={marketId}
               onChange={(e) => setMarketId(e.target.value)}
@@ -647,7 +914,11 @@ export function OracleRoom() {
             disabled={loadingSession}
             className="h-9 rounded-lg border border-white/8 bg-slate-800/80 px-4 text-sm text-slate-300 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {loadingSession ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Load Session'}
+            {loadingSession ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              'Load Session'
+            )}
           </button>
           <button
             onClick={startResolve}
@@ -655,9 +926,15 @@ export function OracleRoom() {
             className="h-9 rounded-lg bg-violet-500 px-5 text-sm font-semibold text-white transition-all duration-200 hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {resolving ? (
-              <span className="flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" />Starting…</span>
+              <span className="flex items-center gap-2">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Starting…
+              </span>
             ) : (
-              <span className="flex items-center gap-1.5"><Zap className="h-3.5 w-3.5" />Trigger Agent Resolve</span>
+              <span className="flex items-center gap-1.5">
+                <Zap className="h-3.5 w-3.5" />
+                Trigger Agent Resolve
+              </span>
             )}
           </button>
           <p className="text-[10px] text-slate-500 font-mono">
@@ -675,13 +952,14 @@ export function OracleRoom() {
       {/* ── Main Grid ───────────────────────────────────────────────────────── */}
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="space-y-5 lg:col-span-2">
-
           {/* ── Quorum Bar ─────────────────────────────────────────────────── */}
           <div className="rounded-2xl border border-white/6 bg-[#070c1a] p-5">
             <div className="mb-4 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Activity className="h-4 w-4 text-violet-400" />
-                <h2 className="text-sm font-semibold text-white">Quorum Status</h2>
+                <h2 className="text-sm font-semibold text-white">
+                  Quorum Status
+                </h2>
               </div>
               <span className="font-mono text-[10px] text-slate-600">
                 threshold {threshold}/{totalAgents} agents
@@ -715,11 +993,15 @@ export function OracleRoom() {
               <div className="flex items-center gap-4">
                 <span className="flex items-center gap-1.5 text-xs">
                   <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                  <span className="font-mono text-emerald-300">YES · {yesVotes}</span>
+                  <span className="font-mono text-emerald-300">
+                    YES · {yesVotes}
+                  </span>
                 </span>
                 <span className="flex items-center gap-1.5 text-xs">
                   <span className="h-2 w-2 rounded-full bg-rose-500" />
-                  <span className="font-mono text-rose-300">NO · {noVotes}</span>
+                  <span className="font-mono text-rose-300">
+                    NO · {noVotes}
+                  </span>
                 </span>
               </div>
 
@@ -740,7 +1022,10 @@ export function OracleRoom() {
                   </motion.div>
                 )}
                 {session?.outcome == null && phase !== 'idle' && (
-                  <motion.span key="pending" className="font-mono text-[10px] text-slate-600">
+                  <motion.span
+                    key="pending"
+                    className="font-mono text-[10px] text-slate-600"
+                  >
                     awaiting quorum
                   </motion.span>
                 )}
@@ -753,10 +1038,13 @@ export function OracleRoom() {
             <div className="mb-4 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Fingerprint className="h-4 w-4 text-violet-400" />
-                <h2 className="text-sm font-semibold text-white">Agent Swarm</h2>
+                <h2 className="text-sm font-semibold text-white">
+                  Agent Swarm
+                </h2>
               </div>
               <span className="font-mono text-[10px] text-slate-600">
-                {agents.filter(a => a.status === 'submitted').length}/{agents.length} submitted
+                {agents.filter((a) => a.status === 'submitted').length}/
+                {agents.length} submitted
               </span>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -766,8 +1054,12 @@ export function OracleRoom() {
               {agents.length === 0 && (
                 <div className="col-span-2 rounded-xl border border-white/5 bg-slate-900/40 px-4 py-10 text-center">
                   <CircleDashed className="mx-auto mb-2 h-6 w-6 text-slate-700" />
-                  <p className="text-sm text-slate-600">No session loaded yet.</p>
-                  <p className="mt-1 text-[11px] text-slate-700">Load a market session or trigger resolution to begin.</p>
+                  <p className="text-sm text-slate-600">
+                    No session loaded yet.
+                  </p>
+                  <p className="mt-1 text-[11px] text-slate-700">
+                    Load a market session or trigger resolution to begin.
+                  </p>
                 </div>
               )}
             </div>
@@ -778,7 +1070,9 @@ export function OracleRoom() {
             <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Database className="h-4 w-4 text-violet-400" />
-                <h2 className="text-sm font-semibold text-white">Event Stream</h2>
+                <h2 className="text-sm font-semibold text-white">
+                  Event Stream
+                </h2>
                 {(session?.log.length ?? 0) > 0 && (
                   <span className="rounded-full border border-white/6 bg-slate-900 px-2 py-0.5 font-mono text-[9px] text-slate-500">
                     {session!.log.length}
@@ -812,7 +1106,7 @@ export function OracleRoom() {
                   — no events yet —
                 </div>
               )}
-              {filteredLog.slice(-120).map((entry, idx) => (
+              {filteredLog.slice(-400).map((entry, idx) => (
                 <LogRow key={`${entry.ts}-${idx}`} entry={entry} />
               ))}
             </div>
@@ -821,19 +1115,24 @@ export function OracleRoom() {
 
         {/* ── Right Sidebar ────────────────────────────────────────────────── */}
         <div className="space-y-5">
-
           {/* ── Proof & Chain Links ─────────────────────────────────────────── */}
           <div className="rounded-2xl border border-white/6 bg-[#070c1a] p-5">
             <div className="mb-4 flex items-center gap-2">
               <Fingerprint className="h-4 w-4 text-violet-400" />
-              <h2 className="text-sm font-semibold text-white">Proof & Chain Links</h2>
+              <h2 className="text-sm font-semibold text-white">
+                Proof & Chain Links
+              </h2>
             </div>
             <div className="space-y-3">
               <HashRow
                 label="Piece CID · Filecoin"
                 icon={Database}
                 value={session?.finalEvidenceCid}
-                href={session?.finalEvidenceCid ? `https://filfox.info/en/search/${session.finalEvidenceCid}` : undefined}
+                href={
+                  session?.finalEvidenceCid
+                    ? `https://filfox.info/en/search/${session.finalEvidenceCid}`
+                    : undefined
+                }
                 copyKey="cid"
                 copied={copied}
                 onCopy={copy}
@@ -841,17 +1140,53 @@ export function OracleRoom() {
               <HashRow
                 label="Calibration Registry TX"
                 icon={Database}
-                value={session?.calibrationTxHash}
-                href={session?.calibrationTxHash ? `${CALIBRATION_EXPLORER_TX_BASE}${session.calibrationTxHash}` : undefined}
+                value={
+                  session?.calibrationTxHash ?? calibrationTxs.at(-1) ?? null
+                }
+                href={
+                  (session?.calibrationTxHash ?? calibrationTxs.at(-1))
+                    ? `${CALIBRATION_EXPLORER_TX_BASE}${session?.calibrationTxHash ?? calibrationTxs.at(-1)}`
+                    : undefined
+                }
                 copyKey="calTx"
                 copied={copied}
                 onCopy={copy}
               />
+              {calibrationTxs.length > 1 && (
+                <div className="rounded-xl border border-white/6 bg-[#0a0f1e] p-3.5">
+                  <div className="mb-2 flex items-center gap-1.5">
+                    <Database className="h-3 w-3 text-slate-600" />
+                    <span className="font-mono text-[9px] font-semibold tracking-widest text-slate-600 uppercase">
+                      Calibration TXs ({calibrationTxs.length})
+                    </span>
+                  </div>
+                  <div className="max-h-28 space-y-1 overflow-auto">
+                    {calibrationTxs
+                      .slice(-6)
+                      .reverse()
+                      .map((tx) => (
+                        <a
+                          key={tx}
+                          href={`${CALIBRATION_EXPLORER_TX_BASE}${tx}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block font-mono text-[10px] text-cyan-400 hover:text-cyan-300"
+                        >
+                          {shorten(tx, 12, 10)}
+                        </a>
+                      ))}
+                  </div>
+                </div>
+              )}
               <HashRow
                 label="Flow Settlement TX"
                 icon={Zap}
                 value={session?.flowTxHash}
-                href={session?.flowTxHash ? `https://evm-testnet.flowscan.io/tx/${session.flowTxHash}` : undefined}
+                href={
+                  session?.flowTxHash
+                    ? `https://evm-testnet.flowscan.io/tx/${session.flowTxHash}`
+                    : undefined
+                }
                 copyKey="flowTx"
                 copied={copied}
                 onCopy={copy}
@@ -863,39 +1198,95 @@ export function OracleRoom() {
           <div className="rounded-2xl border border-white/6 bg-[#070c1a] p-5">
             <div className="mb-4 flex items-center gap-2">
               <Zap className="h-4 w-4 text-amber-400" />
-              <h2 className="text-sm font-semibold text-white">Settlement Relay</h2>
+              <h2 className="text-sm font-semibold text-white">
+                Settlement Relay
+              </h2>
             </div>
 
-            <div className={cn(
-              'rounded-xl border p-3.5 text-xs transition-all duration-500',
-              isFinalized
-                ? 'border-emerald-500/25 bg-emerald-950/20 text-emerald-300'
-                : 'border-white/6 bg-slate-900/40 text-slate-600',
-            )}>
-              {isFinalized ? (
-                <div className="flex items-center gap-2">
-                  <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                  <span className="font-mono text-[11px]">claim endpoint ready</span>
+            <div
+              className={cn(
+                'rounded-xl border p-3.5 text-xs transition-all duration-500',
+                isFinalized || settlementRelay.status !== 'idle'
+                  ? 'border-emerald-500/25 bg-emerald-950/20 text-emerald-300'
+                  : 'border-white/6 bg-slate-900/40 text-slate-600',
+              )}
+            >
+              {isFinalized || settlementRelay.status !== 'idle' ? (
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        'h-2 w-2 rounded-full',
+                        settlementRelay.status === 'running' && 'bg-amber-400',
+                        settlementRelay.status === 'failed' && 'bg-rose-400',
+                        (settlementRelay.status === 'completed' ||
+                          settlementRelay.status === 'disabled' ||
+                          settlementRelay.status === 'pending') &&
+                          'bg-emerald-400',
+                        settlementRelay.status === 'idle' && 'bg-slate-700',
+                      )}
+                    />
+                    <span className="font-mono text-[11px]">
+                      {settlementRelay.status === 'disabled' &&
+                        'user-claim mode (autonomous relay disabled)'}
+                      {settlementRelay.status === 'pending' &&
+                        'resolution finalized — settlement sweep queued'}
+                      {settlementRelay.status === 'running' &&
+                        'settlement sweep running'}
+                      {settlementRelay.status === 'completed' &&
+                        'settlement sweep completed'}
+                      {settlementRelay.status === 'failed' &&
+                        'settlement sweep completed with failures'}
+                      {settlementRelay.status === 'idle' &&
+                        'resolution finalized — waiting for settlement updates'}
+                    </span>
+                  </div>
+                  {settlementRelay.totalUsers > 0 && (
+                    <div className="font-mono text-[10px] text-slate-300">
+                      participants: {settlementRelay.totalUsers} · processed:{' '}
+                      {settlementRelay.processedUsers} · relayed:{' '}
+                      {settlementRelay.relayedUsers} · failed:{' '}
+                      {settlementRelay.failedUsers}
+                    </div>
+                  )}
+                  {settlementRelay.lastError && (
+                    <div className="font-mono text-[10px] text-rose-300">
+                      last error: {settlementRelay.lastError}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="flex items-center gap-2">
                   <span className="h-2 w-2 rounded-full bg-slate-700" />
-                  <span className="font-mono text-[11px]">awaiting finalization</span>
+                  <span className="font-mono text-[11px]">
+                    awaiting resolution finalization
+                  </span>
                 </div>
               )}
             </div>
 
             {/* autonomous actions */}
             <div className="mt-4 space-y-1.5">
-              {autonomousLogs.length > 0 ? autonomousLogs.slice(-8).map((l, i) => (
-                <div key={`${l.ts}-${i}`} className="flex items-start gap-2 text-[11px]">
-                  <span className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400">✓</span>
-                  <span className="font-mono text-slate-400 leading-relaxed">{l.message}</span>
-                </div>
-              )) : (
+              {autonomousLogs.length > 0 ? (
+                autonomousLogs.slice(-24).map((l, i) => (
+                  <div
+                    key={`${l.ts}-${i}`}
+                    className="flex items-start gap-2 text-[11px]"
+                  >
+                    <span className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400">
+                      ✓
+                    </span>
+                    <span className="font-mono text-slate-400 leading-relaxed">
+                      {l.message}
+                    </span>
+                  </div>
+                ))
+              ) : (
                 <div className="flex items-start gap-2 text-[11px] text-slate-700">
                   <CircleDashed className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span className="font-mono">Post-finalization tasks appear here.</span>
+                  <span className="font-mono">
+                    Post-finalization tasks appear here.
+                  </span>
                 </div>
               )}
             </div>
@@ -905,30 +1296,36 @@ export function OracleRoom() {
           <div className="rounded-2xl border border-white/6 bg-[#070c1a] p-5">
             <div className="mb-4 flex items-center gap-2">
               <Activity className="h-4 w-4 text-cyan-400" />
-              <h2 className="text-sm font-semibold text-white">Cross-chain Sync</h2>
+              <h2 className="text-sm font-semibold text-white">
+                Cross-chain Sync
+              </h2>
             </div>
             <div className="space-y-2 font-mono text-[11px]">
               <div className="flex items-center justify-between rounded-lg border border-white/6 bg-[#0a0f1e] px-3 py-2">
                 <span className="text-slate-500">Sepolia (canonical)</span>
-                <span className={cn(
-                  sepoliaSync.status === 'synced' && 'text-emerald-300',
-                  sepoliaSync.status === 'pending' && 'text-amber-300',
-                  sepoliaSync.status === 'failed' && 'text-rose-300',
-                  sepoliaSync.status === 'skipped' && 'text-slate-400',
-                  sepoliaSync.status === 'idle' && 'text-slate-500',
-                )}>
+                <span
+                  className={cn(
+                    sepoliaSync.status === 'synced' && 'text-emerald-300',
+                    sepoliaSync.status === 'pending' && 'text-amber-300',
+                    sepoliaSync.status === 'failed' && 'text-rose-300',
+                    sepoliaSync.status === 'skipped' && 'text-slate-400',
+                    sepoliaSync.status === 'idle' && 'text-slate-500',
+                  )}
+                >
                   {sepoliaSync.status}
                 </span>
               </div>
               <div className="flex items-center justify-between rounded-lg border border-white/6 bg-[#0a0f1e] px-3 py-2">
                 <span className="text-slate-500">Flow (mirrored)</span>
-                <span className={cn(
-                  flowSync.status === 'synced' && 'text-emerald-300',
-                  flowSync.status === 'pending' && 'text-amber-300',
-                  flowSync.status === 'failed' && 'text-rose-300',
-                  flowSync.status === 'skipped' && 'text-slate-400',
-                  flowSync.status === 'idle' && 'text-slate-500',
-                )}>
+                <span
+                  className={cn(
+                    flowSync.status === 'synced' && 'text-emerald-300',
+                    flowSync.status === 'pending' && 'text-amber-300',
+                    flowSync.status === 'failed' && 'text-rose-300',
+                    flowSync.status === 'skipped' && 'text-slate-400',
+                    flowSync.status === 'idle' && 'text-slate-500',
+                  )}
+                >
                   {flowSync.status}
                 </span>
               </div>
@@ -939,7 +1336,11 @@ export function OracleRoom() {
                   label="Sepolia resolve TX"
                   icon={Activity}
                   value={sepoliaSync.txHash}
-                  href={sepoliaSync.txHash ? `https://sepolia.etherscan.io/tx/${sepoliaSync.txHash}` : undefined}
+                  href={
+                    sepoliaSync.txHash
+                      ? `https://sepolia.etherscan.io/tx/${sepoliaSync.txHash}`
+                      : undefined
+                  }
                   copyKey="sepoliaResolveTx"
                   copied={copied}
                   onCopy={copy}
@@ -948,7 +1349,11 @@ export function OracleRoom() {
                   label="Flow resolve TX"
                   icon={Activity}
                   value={flowSync.txHash}
-                  href={flowSync.txHash ? `https://evm-testnet.flowscan.io/tx/${flowSync.txHash}` : undefined}
+                  href={
+                    flowSync.txHash
+                      ? `https://evm-testnet.flowscan.io/tx/${flowSync.txHash}`
+                      : undefined
+                  }
                   copyKey="flowResolveTx"
                   copied={copied}
                   onCopy={copy}
@@ -962,17 +1367,23 @@ export function OracleRoom() {
             <div className="rounded-2xl border border-white/6 bg-[#070c1a] p-5">
               <div className="mb-4 flex items-center gap-2">
                 <Clock className="h-4 w-4 text-slate-600" />
-                <h2 className="text-sm font-semibold text-white">Session Info</h2>
+                <h2 className="text-sm font-semibold text-white">
+                  Session Info
+                </h2>
               </div>
               <div className="space-y-2 font-mono text-[10px]">
                 <div className="flex justify-between">
                   <span className="text-slate-600">started</span>
-                  <span className="text-slate-400">{new Date(session.startedAt).toLocaleString()}</span>
+                  <span className="text-slate-400">
+                    {new Date(session.startedAt).toLocaleString()}
+                  </span>
                 </div>
                 {session.finalizedAt && (
                   <div className="flex justify-between">
-                    <span className="text-slate-600">finalized</span>
-                    <span className="text-slate-400">{new Date(session.finalizedAt).toLocaleString()}</span>
+                    <span className="text-slate-600">resolution finalized</span>
+                    <span className="text-slate-400">
+                      {new Date(session.finalizedAt).toLocaleString()}
+                    </span>
                   </div>
                 )}
                 <div className="flex justify-between">

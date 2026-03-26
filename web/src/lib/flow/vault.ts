@@ -103,6 +103,20 @@ export const GHOST_VAULT_ABI = [
     ],
     outputs: [],
   },
+  {
+    name: 'claimPayoutFor',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'user', type: 'address' },
+      { name: 'marketId', type: 'bytes32' },
+      { name: 'amount',   type: 'uint256' },
+      { name: 'nonce',    type: 'uint256' },
+      { name: 'expiry',   type: 'uint256' },
+      { name: 'sig',      type: 'bytes'   },
+    ],
+    outputs: [],
+  },
   // ─── View ───────────────────────────────────────────────────────────────────
   {
     name: 'getBalance',

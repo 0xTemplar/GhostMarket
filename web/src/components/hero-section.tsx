@@ -32,6 +32,52 @@ const TICKER_ITEMS = [
   { title: 'Arctic Ice Record', yes: 33, change: -1 },
 ];
 
+const HERO_CARD_IMAGES = {
+  main:
+    'https://images.unsplash.com/photo-1642104704074-907c0698cbd9?auto=format&fit=crop&w=1600&q=80',
+  crypto:
+    'https://images.unsplash.com/photo-1621761191319-c6fb62004040?auto=format&fit=crop&w=1200&q=80',
+  portfolio:
+    'https://images.unsplash.com/photo-1642790106117-e829e14a795f?auto=format&fit=crop&w=1200&q=80',
+} as const;
+
+function RightBlendLayer({
+  imageUrl,
+  widthClass = 'w-[52%]',
+  tintColor = 'rgba(15,23,42,0.22)',
+}: {
+  imageUrl: string;
+  widthClass?: string;
+  tintColor?: string;
+}) {
+  const blendMask =
+    'linear-gradient(to left, rgba(0,0,0,1) 48%, rgba(0,0,0,0.88) 63%, rgba(0,0,0,0.34) 82%, rgba(0,0,0,0.06) 94%, transparent 100%)';
+
+  return (
+    <div className={`absolute inset-y-0 right-0 ${widthClass} pointer-events-none`}>
+      <div
+        className="absolute inset-0 opacity-[0.9]"
+        style={{
+          backgroundImage: `url("${imageUrl}")`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          filter: 'brightness(0.78) saturate(1.05) contrast(1.03)',
+          WebkitMaskImage: blendMask,
+          maskImage: blendMask,
+        }}
+      />
+      <div
+        className="absolute inset-0"
+        style={{
+          backgroundImage: `linear-gradient(to left, rgba(2,6,23,0.82) 0%, rgba(2,6,23,0.48) 46%, ${tintColor} 76%, rgba(2,6,23,0.08) 100%)`,
+          WebkitMaskImage: blendMask,
+          maskImage: blendMask,
+        }}
+      />
+    </div>
+  );
+}
+
 // ─── Component ─────────────────────────────────────────────────────────────────
 
 export function HeroSection() {
@@ -60,6 +106,10 @@ export function HeroSection() {
             <div className="absolute inset-0 bg-linear-to-br from-indigo-600/95 via-indigo-700 to-slate-900 transition-transform duration-700 group-hover:scale-[1.015]" />
             <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(255,255,255,0.12),transparent_55%)]" />
             <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_left,rgba(99,102,241,0.3),transparent_60%)]" />
+            <RightBlendLayer
+              imageUrl={HERO_CARD_IMAGES.main}
+              tintColor="rgba(30,41,59,0.2)"
+            />
 
             {/* Rotating decorative rings */}
             {[160, 240, 320].map((size, i) => (
@@ -163,6 +213,11 @@ export function HeroSection() {
             >
               <div className="absolute inset-0 bg-linear-to-br from-violet-700 to-indigo-950 transition-transform duration-500 group-hover:scale-[1.02]" />
               <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_left,rgba(139,92,246,0.4),transparent_70%)]" />
+              <RightBlendLayer
+                widthClass="w-[58%]"
+                imageUrl={HERO_CARD_IMAGES.crypto}
+                tintColor="rgba(67,56,202,0.22)"
+              />
               <div className="relative p-5 h-full flex flex-col justify-between">
                 <div>
                   <div className="text-[10px] font-bold text-violet-300/70 uppercase tracking-widest mb-1">
@@ -193,6 +248,11 @@ export function HeroSection() {
             >
               <div className="absolute inset-0 bg-linear-to-br from-emerald-800 to-teal-950 transition-transform duration-500 group-hover:scale-[1.02]" />
               <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(52,211,153,0.25),transparent_65%)]" />
+              <RightBlendLayer
+                widthClass="w-[58%]"
+                imageUrl={HERO_CARD_IMAGES.portfolio}
+                tintColor="rgba(5,150,105,0.2)"
+              />
               <div className="relative p-5 h-full flex flex-col justify-between">
                 <div>
                   <div className="text-[10px] font-bold text-emerald-300/70 uppercase tracking-widest mb-1">

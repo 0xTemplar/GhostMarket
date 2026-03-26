@@ -65,6 +65,14 @@ export interface OracleSession {
     status: 'idle' | 'pending' | 'synced' | 'failed' | 'skipped';
     txHash: string | null;
   };
+  settlementRelay: {
+    status: 'idle' | 'pending' | 'running' | 'completed' | 'disabled' | 'failed';
+    totalUsers: number;
+    processedUsers: number;
+    relayedUsers: number;
+    failedUsers: number;
+    lastError: string | null;
+  };
   startedAt: number;
   finalizedAt: number | null;
   log: OracleLogEntry[];
@@ -131,6 +139,14 @@ function normalizeOracleSession(raw: Record<string, unknown>): OracleSession {
     flowResolutionSync: (raw.flowResolutionSync as OracleSession['flowResolutionSync']) ?? {
       status: 'idle',
       txHash: null,
+    },
+    settlementRelay: (raw.settlementRelay as OracleSession['settlementRelay']) ?? {
+      status: 'idle',
+      totalUsers: 0,
+      processedUsers: 0,
+      relayedUsers: 0,
+      failedUsers: 0,
+      lastError: null,
     },
     startedAt: Number(raw.startedAt ?? Date.now()),
     finalizedAt: raw.finalizedAt ? Number(raw.finalizedAt) : null,

@@ -51,6 +51,14 @@ export interface ResolutionSession {
     status: 'idle' | 'pending' | 'synced' | 'failed' | 'skipped';
     txHash: string | null;
   };
+  settlementRelay: {
+    status: 'idle' | 'pending' | 'running' | 'completed' | 'disabled' | 'failed';
+    totalUsers: number;
+    processedUsers: number;
+    relayedUsers: number;
+    failedUsers: number;
+    lastError: string | null;
+  };
   startedAt: number;
   finalizedAt: number | null;
   log: LogEntry[];

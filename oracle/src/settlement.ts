@@ -28,6 +28,7 @@ import Redis from 'ioredis';
 const GHOST_VAULT_ADDRESS  = process.env.GHOST_VAULT_ADDRESS ?? '0xAf470490b2462DC7359605B8e5D731CbB7816B55';
 const FLOW_RPC_URL         = process.env.FLOW_RPC_URL ?? 'https://testnet.evm.nodes.onflow.org';
 const SETTLEMENT_SIGNER_KEY = process.env.SETTLEMENT_SIGNER_PRIVATE_KEY ?? '';
+const SETTLEMENT_SIGNATURE_MODE = (process.env.SETTLEMENT_SIGNATURE_MODE ?? 'eip191').toLowerCase();
 const ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY =
   (process.env.ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY ?? 'false').toLowerCase() === 'true';
 const ORACLE_REDIS_URL      = process.env.ORACLE_REDIS_URL ?? process.env.REDIS_URL ?? '';
@@ -55,10 +56,16 @@ const settlements = new Map<string, Map<string, PendingSettlement>>();
 // In-memory fallback store when Redis is not configured.
 // canonicalBetTxHashes[marketId][userAddress] -> betTxHash
 const canonicalBetTxHashes = new Map<string, Map<string, string>>();
+// in-memory fallback list of participants per market
+const marketParticipants = new Map<string, Set<string>>();
 let redisClient: Redis | null = null;
 
 function canonicalTxHashKey(marketId: string, userAddress: string): string {
   return `ghost:oracle:betTxHash:${marketId}:${userAddress.toLowerCase()}`;
+}
+
+function marketParticipantsKey(marketId: string): string {
+  return `ghost:oracle:marketParticipants:${marketId}`;
 }
 
 function getRedisClient(): Redis | null {
@@ -106,6 +113,7 @@ export async function registerCanonicalBetTxHash(
     try {
       if (redis.status === 'wait') await redis.connect();
       await redis.set(canonicalTxHashKey(marketId, user), tx);
+      await redis.sadd(marketParticipantsKey(marketId), user);
       return;
     } catch (err) {
       console.warn('[Settlement] Redis write failed, using in-memory fallback:', (err as Error).message);
@@ -114,6 +122,8 @@ export async function registerCanonicalBetTxHash(
 
   if (!canonicalBetTxHashes.has(marketId)) canonicalBetTxHashes.set(marketId, new Map());
   canonicalBetTxHashes.get(marketId)!.set(user, tx);
+  if (!marketParticipants.has(marketId)) marketParticipants.set(marketId, new Set());
+  marketParticipants.get(marketId)!.add(user);
 }
 
 /**
@@ -135,6 +145,23 @@ export async function getCanonicalBetTxHash(
     }
   }
   return canonicalBetTxHashes.get(marketId)?.get(user) ?? null;
+}
+
+/**
+ * Return known users for a market based on canonical bet registrations.
+ */
+export async function listMarketParticipants(marketId: string): Promise<string[]> {
+  const redis = getRedisClient();
+  if (redis) {
+    try {
+      if (redis.status === 'wait') await redis.connect();
+      const users = await redis.smembers(marketParticipantsKey(marketId));
+      if (users.length > 0) return users.map((u) => u.toLowerCase());
+    } catch (err) {
+      console.warn('[Settlement] Redis participant read failed, using in-memory fallback:', (err as Error).message);
+    }
+  }
+  return Array.from(marketParticipants.get(marketId) ?? []).map((u) => u.toLowerCase());
 }
 
 /**
@@ -273,6 +300,7 @@ export async function deliverSettlementOnChain(
 
   const VAULT_ABI = [
     'function claimPayout(bytes32 marketId, uint256 amount, uint256 nonce, uint256 expiry, bytes calldata sig) external',
+    'function claimPayoutFor(address user, bytes32 marketId, uint256 amount, uint256 nonce, uint256 expiry, bytes calldata sig) external',
     'event PayoutClaimed(address indexed user, bytes32 indexed marketId, uint256 amount)',
   ];
 
@@ -286,13 +314,22 @@ export async function deliverSettlementOnChain(
 
     console.log(`[Settlement] Delivering settlement on Flow EVM for ${settlement.userAddress}…`);
 
-    const tx = await vault.claimPayout(
-      marketIdBytes32,
-      BigInt(settlement.payout),
-      BigInt(settlement.nonce),
-      BigInt(settlement.expiry),
-      settlement.sig,
-    );
+    const tx = SETTLEMENT_SIGNATURE_MODE === 'eip712'
+      ? await vault.claimPayoutFor(
+        settlement.userAddress,
+        marketIdBytes32,
+        BigInt(settlement.payout),
+        BigInt(settlement.nonce),
+        BigInt(settlement.expiry),
+        settlement.sig,
+      )
+      : await vault.claimPayout(
+        marketIdBytes32,
+        BigInt(settlement.payout),
+        BigInt(settlement.nonce),
+        BigInt(settlement.expiry),
+        settlement.sig,
+      );
 
     console.log(`[Settlement] TX submitted: ${tx.hash}`);
     const receipt = await tx.wait();

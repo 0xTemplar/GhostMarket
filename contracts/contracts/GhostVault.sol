@@ -4,6 +4,8 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 
 /**
  * @title GhostVault
@@ -35,7 +37,7 @@ import "@openzeppelin/contracts/access/Ownable2Step.sol";
  *  - Pausable circuit breaker.
  *  - Ownable2Step: new owner must explicitly accept before transfer completes.
  */
-contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step {
+contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step, EIP712 {
 
     // ─── State ────────────────────────────────────────────────────────────────
 
@@ -77,9 +79,12 @@ contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step {
     error ZeroAddress();
     error BetAlreadyLocked(bytes32 marketId);
 
+    bytes32 public constant CLAIM_TYPEHASH =
+        keccak256("Claim(address user,bytes32 marketId,uint256 amount,uint256 nonce,uint256 expiry)");
+
     // ─── Constructor ──────────────────────────────────────────────────────────
 
-    constructor(address _settlementSigner) Ownable(msg.sender) {
+    constructor(address _settlementSigner) Ownable(msg.sender) EIP712("GhostVault", "1") {
         if (_settlementSigner == address(0)) revert ZeroAddress();
         settlementSigner = _settlementSigner;
     }
@@ -165,29 +170,7 @@ contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step {
     // ─── Payout claim (Phase 6 stub) ──────────────────────────────────────────
 
     /**
-     * @notice Claim a payout after oracle quorum + Lit attestation (Phase 6).
-     *
-     * If collateral was locked for this market via lockForBet(), claimPayout
-     * atomically:
-     *   1. Releases the lock (frees it from totalLocked).
-     *   2. Debits the original stake from balances.
-     *   3. Credits the attested payout amount.
-     *
-     * For winners: payout > stake → net gain.
-     * For losers:  payout = 0    → stake is consumed, net loss.
-     * If no lock existed (e.g. legacy / demo flow): payout is credited as-is.
-     *
-     * The settlement signer signs the following EIP-191 message:
-     *   keccak256(abi.encodePacked(
-     *     "\x19Ethereum Signed Message:\n32",
-     *     keccak256(abi.encode(user, marketId, amount, nonce, expiry, address(this)))
-     *   ))
-     *
-     * @param marketId  Unique identifier for the resolved market.
-     * @param amount    Net payout in wei (winners: > stake; losers: 0).
-     * @param nonce     Per-market nonce; must be unused for (user, marketId).
-     * @param expiry    Unix timestamp after which this claim is invalid.
-     * @param sig       65-byte ECDSA signature from `settlementSigner`.
+     * @notice Claim payout for msg.sender using EIP-712 oracle permit.
      */
     function claimPayout(
         bytes32 marketId,
@@ -196,36 +179,23 @@ contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step {
         uint256 expiry,
         bytes calldata sig
     ) external nonReentrant {
-        if (block.timestamp > expiry) revert PayoutExpired();
-        if (usedNonces[msg.sender][marketId][nonce]) revert NonceAlreadyUsed();
+        _claimPayoutFor(msg.sender, marketId, amount, nonce, expiry, sig);
+    }
 
-        bytes32 msgHash = keccak256(
-            abi.encode(msg.sender, marketId, amount, nonce, expiry, address(this))
-        );
-        bytes32 ethHash = keccak256(
-            abi.encodePacked("\x19Ethereum Signed Message:\n32", msgHash)
-        );
-
-        address recovered = _recoverSigner(ethHash, sig);
-        if (recovered != settlementSigner) revert InvalidSignature();
-
-        usedNonces[msg.sender][marketId][nonce] = true;
-
-        // ── Release collateral lock if one exists ─────────────────────────────
-        // balances[user] >= totalLocked[user] is always true because lockForBet
-        // validates free balance and withdraw only reduces free balance.
-        uint256 locked = lockedAmounts[msg.sender][marketId];
-        if (locked > 0) {
-            lockedAmounts[msg.sender][marketId] = 0;
-            totalLocked[msg.sender] -= locked;
-            balances[msg.sender] -= locked;   // deduct the stake
-            emit BetUnlocked(msg.sender, marketId, locked);
-        }
-
-        // Credit the net payout (0 for losers, >0 for winners).
-        balances[msg.sender] += amount;
-
-        emit PayoutClaimed(msg.sender, marketId, amount);
+    /**
+     * @notice Claim payout on behalf of `user` using an EIP-712 signed permit.
+     * @dev Enables relayer gas sponsorship while retaining user-bound replay protection.
+     */
+    function claimPayoutFor(
+        address user,
+        bytes32 marketId,
+        uint256 amount,
+        uint256 nonce,
+        uint256 expiry,
+        bytes calldata sig
+    ) external nonReentrant {
+        if (user == address(0)) revert ZeroAddress();
+        _claimPayoutFor(user, marketId, amount, nonce, expiry, sig);
     }
 
     // ─── View helpers ─────────────────────────────────────────────────────────
@@ -253,17 +223,36 @@ contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step {
 
     // ─── Internal ─────────────────────────────────────────────────────────────
 
-    function _recoverSigner(bytes32 hash, bytes calldata sig) internal pure returns (address) {
-        if (sig.length != 65) revert InvalidSignature();
-        bytes32 r;
-        bytes32 s;
-        uint8 v;
-        assembly {
-            r := calldataload(sig.offset)
-            s := calldataload(add(sig.offset, 32))
-            v := byte(0, calldataload(add(sig.offset, 64)))
+    function _claimPayoutFor(
+        address user,
+        bytes32 marketId,
+        uint256 amount,
+        uint256 nonce,
+        uint256 expiry,
+        bytes calldata sig
+    ) internal {
+        if (block.timestamp > expiry) revert PayoutExpired();
+        if (usedNonces[user][marketId][nonce]) revert NonceAlreadyUsed();
+
+        bytes32 structHash = keccak256(
+            abi.encode(CLAIM_TYPEHASH, user, marketId, amount, nonce, expiry)
+        );
+        bytes32 digest = _hashTypedDataV4(structHash);
+        address recovered = ECDSA.recover(digest, sig);
+        if (recovered != settlementSigner) revert InvalidSignature();
+
+        usedNonces[user][marketId][nonce] = true;
+
+        uint256 locked = lockedAmounts[user][marketId];
+        if (locked > 0) {
+            lockedAmounts[user][marketId] = 0;
+            totalLocked[user] -= locked;
+            balances[user] -= locked;
+            emit BetUnlocked(user, marketId, locked);
         }
-        return ecrecover(hash, v, r, s);
+
+        balances[user] += amount;
+        emit PayoutClaimed(user, marketId, amount);
     }
 
     /**
