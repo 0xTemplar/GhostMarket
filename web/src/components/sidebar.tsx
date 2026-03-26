@@ -61,15 +61,15 @@ export function Sidebar() {
     <div className="space-y-5">
 
       {/* ── Platform stats ── */}
-      <div className="bg-slate-900 rounded-xl px-4 py-3.5 border border-white/5">
+      <div className="bg-slate-950/85 rounded-xl px-4 py-3.5 border border-white/8">
         <div className="flex items-center justify-between mb-3">
           <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Platform</span>
           <span className="flex items-center gap-1 text-[10px] text-slate-500">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse" />
             Live
           </span>
         </div>
-        <div className="grid grid-cols-4 divide-x divide-white/5">
+        <div className="grid grid-cols-4 divide-x divide-white/8">
           {PLATFORM_STATS.map((stat) => (
             <div key={stat.label} className="px-2 first:pl-0 last:pr-0 text-center">
               <div className="text-sm font-bold text-white tabular-nums">{stat.value}</div>
@@ -80,10 +80,10 @@ export function Sidebar() {
       </div>
 
       {/* ── Portfolio widget ── */}
-      <div className="bg-slate-900 rounded-2xl p-5 border border-white/5">
+      <div className="bg-slate-950/85 rounded-2xl p-5 border border-white/8">
         <div className="flex items-start justify-between mb-4">
           <div className="flex gap-3">
-            <div className="p-2 bg-indigo-500/10 rounded-lg text-indigo-400">
+            <div className="p-2 bg-slate-900 rounded-lg text-slate-300 border border-white/8">
               <Wallet className="w-5 h-5" strokeWidth={1.5} />
             </div>
             <div>
@@ -94,7 +94,7 @@ export function Sidebar() {
         </div>
         <Link
           href="/portfolio"
-          className="w-full bg-slate-800 hover:bg-slate-700/80 text-white py-2.5 rounded-xl text-sm font-medium transition-colors border border-white/5 hover:border-white/10 flex items-center justify-between px-4 group"
+          className="w-full bg-slate-900 hover:bg-slate-800 text-white py-2.5 rounded-xl text-sm font-medium transition-colors border border-white/8 hover:border-white/14 flex items-center justify-between px-4 group"
         >
           <span>View Portfolio</span>
           <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white transition-colors" strokeWidth={1.5} />
@@ -102,10 +102,10 @@ export function Sidebar() {
       </div>
 
       {/* ── Oracle room widget ── */}
-      <div className="bg-slate-900 rounded-2xl p-5 border border-white/5">
+      <div className="bg-slate-950/85 rounded-2xl p-5 border border-white/8">
         <div className="flex items-start justify-between mb-4">
           <div className="flex gap-3">
-            <div className="p-2 bg-amber-500/10 rounded-lg text-amber-400">
+            <div className="p-2 bg-slate-900 rounded-lg text-slate-300 border border-white/8">
               <Radar className="w-5 h-5" strokeWidth={1.5} />
             </div>
             <div>
@@ -116,7 +116,7 @@ export function Sidebar() {
         </div>
         <Link
           href="/oracle"
-          className="w-full bg-slate-800 hover:bg-slate-700/80 text-white py-2.5 rounded-xl text-sm font-medium transition-colors border border-white/5 hover:border-white/10 flex items-center justify-between px-4 group"
+          className="w-full bg-slate-900 hover:bg-slate-800 text-white py-2.5 rounded-xl text-sm font-medium transition-colors border border-white/8 hover:border-white/14 flex items-center justify-between px-4 group"
         >
           <span>Open Oracle Room</span>
           <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white transition-colors" strokeWidth={1.5} />
@@ -124,9 +124,9 @@ export function Sidebar() {
       </div>
 
       {/* ── Watchlist widget ── */}
-      <div className="bg-slate-900 rounded-2xl p-5 border border-white/5">
+      <div className="bg-slate-950/85 rounded-2xl p-5 border border-white/8">
         <div className="flex items-start gap-3 mb-2">
-          <div className="p-2 bg-amber-500/10 rounded-lg text-amber-500">
+          <div className="p-2 bg-slate-900 rounded-lg text-slate-300 border border-white/8">
             <Star className="w-5 h-5" strokeWidth={1.5} />
           </div>
           <div>
@@ -144,7 +144,7 @@ export function Sidebar() {
       </div>
 
       {/* ── Trending Topics ── */}
-      <div className="bg-slate-900 rounded-2xl p-5 border border-white/5">
+      <div className="bg-slate-950/85 rounded-2xl p-5 border border-white/8">
         <div className="flex justify-between items-center mb-4">
           <h3 className="font-medium text-white text-sm">Trending Topics</h3>
           <Link href="/" className="text-xs text-slate-500 hover:text-white transition-colors">See all</Link>
@@ -154,7 +154,7 @@ export function Sidebar() {
             <Link
               key={topic.label}
               href={topic.href}
-              className={`bg-slate-800/70 text-xs px-3 py-1.5 rounded-lg text-slate-400 border border-white/5 transition-all duration-200 ${topic.color}`}
+              className={`bg-slate-900 text-xs px-3 py-1.5 rounded-lg text-slate-400 border border-white/8 transition-all duration-200 ${topic.color}`}
             >
               {topic.label}
             </Link>
@@ -163,18 +163,18 @@ export function Sidebar() {
       </div>
 
       {/* ── Recent Activity ── */}
-      <div className="bg-slate-900 rounded-2xl p-5 border border-white/5">
+      <div className="bg-slate-950/85 rounded-2xl p-5 border border-white/8">
         <div className="flex justify-between items-center mb-4">
           <h3 className="font-medium text-white text-sm">Recent Activity</h3>
           <span className="flex items-center gap-1 text-[10px] text-slate-500">
-            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-pulse" />
             Live feed
           </span>
         </div>
         <div className="space-y-4">
           {recentActivity.map((item, i) => (
             <div key={i} className="flex gap-3 items-start group">
-              <div className="w-7 h-7 rounded-full bg-slate-800 shrink-0 border border-white/5 flex items-center justify-center text-[10px] font-bold text-slate-500">
+              <div className="w-7 h-7 rounded-full bg-slate-900 shrink-0 border border-white/8 flex items-center justify-center text-[10px] font-bold text-slate-500">
                 {item.user.slice(0, 2).toUpperCase()}
               </div>
               <div className="text-xs min-w-0 flex-1">
@@ -195,7 +195,7 @@ export function Sidebar() {
             </div>
           ))}
         </div>
-        <div className="mt-4 pt-3 border-t border-white/5">
+        <div className="mt-4 pt-3 border-t border-white/8">
           <Link href="/" className="text-xs text-slate-500 hover:text-white flex items-center gap-1 justify-center transition-colors">
             View all activity <ChevronRight className="w-3 h-3" strokeWidth={1.5} />
           </Link>

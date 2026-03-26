@@ -26,30 +26,30 @@ export function PortfolioSummary({ stats }: PortfolioSummaryProps) {
       label: 'Total Value',
       value: formatCurrency(stats.totalValue),
       icon: Layers,
-      color: 'text-indigo-400',
-      bg: 'bg-indigo-500/10',
+      color: 'text-slate-300',
+      bg: 'bg-slate-900 border border-white/8',
     },
     {
       label: 'Total P&L',
       value: `${isPositive ? '+' : ''}${formatCurrency(stats.totalPnl)}`,
       sub: formatPercent(stats.totalPnlPercent),
       icon: isPositive ? TrendingUp : TrendingDown,
-      color: isPositive ? 'text-emerald-500' : 'text-rose-500',
-      bg: isPositive ? 'bg-emerald-500/10' : 'bg-rose-500/10',
+      color: isPositive ? 'text-emerald-300' : 'text-rose-300',
+      bg: 'bg-slate-900 border border-white/8',
     },
     {
       label: 'Open Positions',
       value: stats.openPositions.toString(),
       icon: Target,
-      color: 'text-slate-400',
-      bg: 'bg-slate-800',
+      color: 'text-slate-300',
+      bg: 'bg-slate-900 border border-white/8',
     },
     {
       label: 'Cost Basis',
       value: formatCurrency(stats.totalCost),
       icon: Layers,
-      color: 'text-slate-400',
-      bg: 'bg-slate-800',
+      color: 'text-slate-300',
+      bg: 'bg-slate-900 border border-white/8',
     },
   ];
 
@@ -62,7 +62,7 @@ export function PortfolioSummary({ stats }: PortfolioSummaryProps) {
           initial="hidden"
           animate="visible"
           variants={cardVariants}
-          className="rounded-2xl border border-white/5 bg-slate-900 p-5"
+          className="rounded-2xl border border-white/8 bg-slate-950/85 p-5"
         >
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">
@@ -84,7 +84,7 @@ export function PortfolioSummary({ stats }: PortfolioSummaryProps) {
             <div
               className={cn(
                 'mt-1 text-sm font-medium',
-                isPositive ? 'text-emerald-500' : 'text-rose-500'
+                isPositive ? 'text-emerald-300' : 'text-rose-300'
               )}
             >
               {card.sub}

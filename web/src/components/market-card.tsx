@@ -21,16 +21,32 @@ function isLiveMarket(id: string): boolean {
 // ─── Category accent — left border only, no bg flood ─────────────────────────
 
 const CATEGORY_BORDER: Record<string, string> = {
-  Crypto:   'border-l-violet-500/50',
-  Macro:    'border-l-amber-500/50',
-  Politics: 'border-l-blue-500/50',
-  Sports:   'border-l-green-500/50',
-  Tech:     'border-l-cyan-500/50',
-  Climate:  'border-l-teal-500/50',
+  Crypto:   'border-l-violet-400/40',
+  Macro:    'border-l-amber-400/40',
+  Politics: 'border-l-blue-400/40',
+  Sports:   'border-l-green-400/40',
+  Tech:     'border-l-cyan-400/40',
+  Climate:  'border-l-teal-400/40',
 };
 
 function categoryBorder(cat: string) {
   return CATEGORY_BORDER[cat] ?? 'border-l-indigo-500/50';
+}
+
+function formatCount(value: number) {
+  return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+}
+
+function MarketMetaStrip({ market }: { market: Market }) {
+  return (
+    <div className="flex items-center gap-3 text-[11px] text-slate-400">
+      <span>Vol {formatVolume(market.volume)}</span>
+      <span className="text-white/10">|</span>
+      <span>Liq {formatVolume(market.liquidity)}</span>
+      <span className="text-white/10">|</span>
+      <span>{formatCount(market.tradersCount)} traders</span>
+    </div>
+  );
 }
 
 // ─── Flat YES / NO price buttons ─────────────────────────────────────────────
@@ -45,30 +61,37 @@ function PriceButtons({
   const { openBetSlip } = useBetSlip();
   const yesPct = Math.round(market.yesPrice * 100);
   const noPct  = 100 - yesPct;
-  const numCls = size === 'md' ? 'text-base font-bold' : 'text-sm font-semibold';
+  const numCls = size === 'md' ? 'text-xl font-bold tracking-tight' : 'text-lg font-bold tracking-tight';
+  const quoteCls = size === 'md' ? 'text-[10px]' : 'text-[10px]';
 
   return (
     <div className="space-y-2">
       <div className="flex gap-2">
         <button
           onClick={(e) => { e.preventDefault(); openBetSlip(market, 'YES'); }}
-          className="flex-1 flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-emerald-500/8 border border-emerald-500/15 hover:bg-emerald-500/12 hover:border-emerald-500/35 transition-all cursor-pointer"
+          className="flex-1 rounded-lg bg-slate-900/90 border border-emerald-400/18 hover:border-emerald-300/28 transition-colors cursor-pointer px-3 py-2.5"
         >
-          <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Yes</span>
-          <span className={`font-mono text-emerald-400 ${numCls}`}>{yesPct}¢</span>
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[10px] font-bold text-emerald-300/80 uppercase tracking-[0.14em]">YES</span>
+            <span className={`font-mono text-emerald-300 tabular-nums ${numCls}`}>{yesPct}¢</span>
+          </div>
+          <div className={`${quoteCls} mt-0.5 text-slate-500`}>{yesPct}% implied</div>
         </button>
         <button
           onClick={(e) => { e.preventDefault(); openBetSlip(market, 'NO'); }}
-          className="flex-1 flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-rose-500/8 border border-rose-500/15 hover:bg-rose-500/12 hover:border-rose-500/35 transition-all cursor-pointer"
+          className="flex-1 rounded-lg bg-slate-900/90 border border-rose-400/18 hover:border-rose-300/28 transition-colors cursor-pointer px-3 py-2.5"
         >
-          <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">No</span>
-          <span className={`font-mono text-rose-400 ${numCls}`}>{noPct}¢</span>
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[10px] font-bold text-rose-300/80 uppercase tracking-[0.14em]">NO</span>
+            <span className={`font-mono text-rose-300 tabular-nums ${numCls}`}>{noPct}¢</span>
+          </div>
+          <div className={`${quoteCls} mt-0.5 text-slate-500`}>{noPct}% implied</div>
         </button>
       </div>
       {/* Probability split bar */}
-      <div className="h-px w-full rounded-full overflow-hidden bg-rose-500/20">
+      <div className="h-0.5 w-full rounded-full overflow-hidden bg-slate-700/45">
         <div
-          className="h-full bg-emerald-500/60 transition-all duration-300"
+          className="h-full bg-emerald-400/75 transition-all duration-300"
           style={{ width: `${yesPct}%` }}
         />
       </div>
@@ -85,17 +108,23 @@ function LivePriceDisplay({ market }: { market: Market }) {
   return (
     <div className="space-y-2">
       <div className="flex gap-2">
-        <div className="flex-1 flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-emerald-500/8 border border-emerald-500/15">
-          <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Yes</span>
-          <span className="font-mono text-base font-bold text-emerald-400">{yesPct}¢</span>
+        <div className="flex-1 rounded-lg bg-slate-900/90 border border-emerald-400/18 px-3 py-2.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[10px] font-bold text-emerald-300/80 uppercase tracking-[0.14em]">YES</span>
+            <span className="font-mono text-xl font-bold tracking-tight text-emerald-300 tabular-nums">{yesPct}¢</span>
+          </div>
+          <div className="text-[10px] mt-0.5 text-slate-500">{yesPct}% implied</div>
         </div>
-        <div className="flex-1 flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-rose-500/8 border border-rose-500/15">
-          <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">No</span>
-          <span className="font-mono text-base font-bold text-rose-400">{noPct}¢</span>
+        <div className="flex-1 rounded-lg bg-slate-900/90 border border-rose-400/18 px-3 py-2.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[10px] font-bold text-rose-300/80 uppercase tracking-[0.14em]">NO</span>
+            <span className="font-mono text-xl font-bold tracking-tight text-rose-300 tabular-nums">{noPct}¢</span>
+          </div>
+          <div className="text-[10px] mt-0.5 text-slate-500">{noPct}% implied</div>
         </div>
       </div>
-      <div className="h-px w-full rounded-full overflow-hidden bg-rose-500/20">
-        <div className="h-full bg-emerald-500/60 transition-all" style={{ width: `${yesPct}%` }} />
+      <div className="h-0.5 w-full rounded-full overflow-hidden bg-slate-700/45">
+        <div className="h-full bg-emerald-400/75 transition-all" style={{ width: `${yesPct}%` }} />
       </div>
     </div>
   );
@@ -168,7 +197,7 @@ function HighlightCard({ market, index }: { market: Market; index: number }) {
     >
       <Link
         href={`/markets/${market.id}`}
-        className={`group relative block bg-slate-900/60 rounded-xl border-l-2 ${categoryBorder(market.category)} border border-white/5 hover:border-white/10 p-5 transition-all duration-200`}
+        className={`group relative block bg-slate-950/70 rounded-xl border-l-2 ${categoryBorder(market.category)} border border-white/8 hover:border-white/14 hover:-translate-y-0.5 p-5 transition-all duration-200`}
       >
         <div className="space-y-4">
           {/* Header */}
@@ -198,6 +227,8 @@ function HighlightCard({ market, index }: { market: Market; index: number }) {
             </div>
           </div>
 
+          <MarketMetaStrip market={market} />
+
           {/* Price display */}
           {live ? (
             <LivePriceDisplay market={market} />
@@ -225,7 +256,7 @@ function CompactCard({ market, index }: { market: Market; index: number }) {
     >
       <Link
         href={`/markets/${market.id}`}
-        className={`group block bg-slate-900 border-l-2 ${categoryBorder(market.category)} border border-white/5 rounded-xl p-4 hover:border-white/10 transition-all duration-200`}
+        className={`group block bg-slate-950/85 border-l-2 ${categoryBorder(market.category)} border border-white/8 rounded-xl p-4 hover:border-white/14 hover:-translate-y-0.5 transition-all duration-200`}
       >
         {/* Header */}
         <div className="flex gap-3 mb-4">
@@ -253,6 +284,8 @@ function CompactCard({ market, index }: { market: Market; index: number }) {
             </h3>
           </div>
         </div>
+
+        <div className="mb-3"><MarketMetaStrip market={market} /></div>
 
         {/* Price display */}
         <div className="mb-4">

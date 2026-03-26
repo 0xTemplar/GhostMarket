@@ -188,37 +188,37 @@ function useCopyToClipboard() {
 const PHASE_CFG: Record<string, { label: string; cls: string; dot: string }> = {
   idle: {
     label: 'Idle',
-    cls: 'text-slate-400 border-slate-600/40 bg-slate-800/60',
+    cls: 'text-slate-400 border-slate-600/40 bg-slate-900/80',
     dot: 'bg-slate-500',
   },
   pending: {
     label: 'Pending',
-    cls: 'text-slate-400 border-slate-600/40 bg-slate-800/60',
+    cls: 'text-slate-400 border-slate-600/40 bg-slate-900/80',
     dot: 'bg-slate-500',
   },
   collecting: {
     label: 'Collecting',
-    cls: 'text-blue-300 border-blue-500/40 bg-blue-950/40',
+    cls: 'text-sky-300 border-sky-500/35 bg-slate-900/80',
     dot: 'bg-blue-400 animate-pulse',
   },
   quorum_reached: {
     label: 'Quorum',
-    cls: 'text-amber-300 border-amber-500/40 bg-amber-950/40',
+    cls: 'text-amber-300 border-amber-500/35 bg-slate-900/80',
     dot: 'bg-amber-400 animate-pulse',
   },
   uploading: {
     label: 'Uploading',
-    cls: 'text-violet-300 border-violet-500/40 bg-violet-950/40',
+    cls: 'text-indigo-300 border-indigo-500/35 bg-slate-900/80',
     dot: 'bg-violet-400 animate-pulse',
   },
   finalized: {
     label: 'Resolution Finalized',
-    cls: 'text-emerald-300 border-emerald-500/40 bg-emerald-950/40',
+    cls: 'text-emerald-300 border-emerald-500/35 bg-slate-900/80',
     dot: 'bg-emerald-400',
   },
   failed: {
     label: 'Failed',
-    cls: 'text-rose-300 border-rose-500/40 bg-rose-950/40',
+    cls: 'text-rose-300 border-rose-500/35 bg-slate-900/80',
     dot: 'bg-rose-400',
   },
 };
@@ -291,18 +291,18 @@ function AgentCard({ agent }: { agent: OracleAgentView }) {
       className={cn(
         'group relative overflow-hidden rounded-xl border p-4 transition-all duration-500',
         isDone
-          ? 'border-emerald-500/25 bg-emerald-950/15 shadow-emerald-500/5 shadow-lg'
+          ? 'border-emerald-400/25 bg-slate-950/90'
           : isActive
-            ? 'border-violet-500/30 bg-violet-950/15 shadow-violet-500/10 shadow-lg'
-            : 'border-white/6 bg-[#0a0f1e]',
+            ? 'border-indigo-400/25 bg-slate-950/90'
+            : 'border-white/8 bg-slate-950/90',
       )}
     >
       {/* animated glow layer */}
       {isActive && (
-        <div className="pointer-events-none absolute inset-0 rounded-xl bg-linear-to-br from-violet-500/5 via-transparent to-transparent animate-pulse" />
+        <div className="pointer-events-none absolute inset-0 rounded-xl bg-linear-to-br from-indigo-400/5 via-transparent to-transparent animate-pulse" />
       )}
       {isDone && (
-        <div className="pointer-events-none absolute inset-0 rounded-xl bg-linear-to-br from-emerald-500/5 via-transparent to-transparent" />
+        <div className="pointer-events-none absolute inset-0 rounded-xl bg-linear-to-br from-emerald-400/5 via-transparent to-transparent" />
       )}
 
       {/* header row */}
@@ -352,7 +352,7 @@ function AgentCard({ agent }: { agent: OracleAgentView }) {
 
       {/* CID strip */}
       {agent.storachaCid && agent.storachaCid !== 'not-configured' && (
-        <div className="relative mt-2.5 rounded-md border border-white/5 bg-slate-950/80 px-2.5 py-1.5">
+        <div className="relative mt-2.5 rounded-md border border-white/8 bg-slate-900/80 px-2.5 py-1.5">
           <span className="font-mono text-[9px] text-slate-600 uppercase tracking-wider">
             storacha{' '}
           </span>
@@ -362,7 +362,7 @@ function AgentCard({ agent }: { agent: OracleAgentView }) {
         </div>
       )}
       {agent.reasoning && (
-        <div className="relative mt-2 rounded-md border border-white/5 bg-slate-950/70 px-2.5 py-1.5">
+        <div className="relative mt-2 rounded-md border border-white/8 bg-slate-900/80 px-2.5 py-1.5">
           <span className="font-mono text-[9px] text-slate-600 uppercase tracking-wider">
             reasoning{' '}
           </span>
@@ -500,7 +500,7 @@ function HashRow({
   onCopy: (v: string, k: string) => void;
 }) {
   return (
-    <div className="rounded-xl border border-white/6 bg-[#0a0f1e] p-3.5">
+    <div className="rounded-xl border border-white/8 bg-slate-950/90 p-3.5">
       <div className="mb-2 flex items-center gap-1.5">
         <Icon className="h-3 w-3 text-slate-600" />
         <span className="font-mono text-[9px] font-semibold tracking-widest text-slate-600 uppercase">
@@ -822,11 +822,11 @@ export function OracleRoom() {
       {/* ── Command Bar ─────────────────────────────────────────────────────── */}
       <div
         className={cn(
-          'relative overflow-hidden rounded-2xl border bg-[#070c1a] p-5 transition-all duration-700',
+          'relative overflow-hidden rounded-2xl border bg-slate-950/85 p-5 transition-all duration-700',
           isFinalized
-            ? 'border-emerald-500/20 shadow-emerald-500/5 shadow-xl'
+            ? 'border-emerald-400/20 shadow-emerald-500/5 shadow-xl'
             : isLive
-              ? 'border-violet-500/20 shadow-violet-500/5 shadow-xl'
+              ? 'border-indigo-400/20 shadow-indigo-500/5 shadow-xl'
               : 'border-white/8',
         )}
       >
@@ -835,8 +835,8 @@ export function OracleRoom() {
           className={cn(
             'pointer-events-none absolute inset-0 opacity-20',
             isFinalized
-              ? 'bg-linear-to-br from-emerald-950 via-transparent to-transparent'
-              : 'bg-linear-to-br from-violet-950 via-transparent to-transparent',
+              ? 'bg-linear-to-br from-emerald-950/40 via-transparent to-transparent'
+              : 'bg-linear-to-br from-indigo-950/35 via-transparent to-transparent',
           )}
         />
 
@@ -846,14 +846,14 @@ export function OracleRoom() {
               className={cn(
                 'flex h-8 w-8 items-center justify-center rounded-lg border',
                 isFinalized
-                  ? 'border-emerald-500/30 bg-emerald-950/50'
-                  : 'border-violet-500/30 bg-violet-950/50',
+                  ? 'border-emerald-400/30 bg-slate-900'
+                  : 'border-indigo-400/30 bg-slate-900',
               )}
             >
               <Shield
                 className={cn(
                   'h-4 w-4',
-                  isFinalized ? 'text-emerald-400' : 'text-violet-400',
+                  isFinalized ? 'text-emerald-300' : 'text-indigo-300',
                 )}
               />
             </div>
@@ -906,7 +906,7 @@ export function OracleRoom() {
             <input
               value={marketId}
               onChange={(e) => setMarketId(e.target.value)}
-              className="h-9 w-28 rounded-lg border border-white/8 bg-slate-900 px-3 font-mono text-sm text-white placeholder:text-slate-700 focus:border-violet-500/50 focus:outline-none"
+              className="h-9 w-28 rounded-lg border border-white/8 bg-slate-900 px-3 font-mono text-sm text-white placeholder:text-slate-700 focus:border-indigo-400/50 focus:outline-none"
             />
           </div>
           <button
@@ -923,7 +923,7 @@ export function OracleRoom() {
           <button
             onClick={startResolve}
             disabled={resolving}
-            className="h-9 rounded-lg bg-violet-500 px-5 text-sm font-semibold text-white transition-all duration-200 hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-40"
+            className="h-9 rounded-lg border border-indigo-400/30 bg-slate-900 px-5 text-sm font-semibold text-indigo-200 transition-all duration-200 hover:border-indigo-300/50 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {resolving ? (
               <span className="flex items-center gap-2">
@@ -953,10 +953,10 @@ export function OracleRoom() {
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="space-y-5 lg:col-span-2">
           {/* ── Quorum Bar ─────────────────────────────────────────────────── */}
-          <div className="rounded-2xl border border-white/6 bg-[#070c1a] p-5">
+          <div className="rounded-2xl border border-white/8 bg-slate-950/85 p-5">
             <div className="mb-4 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Activity className="h-4 w-4 text-violet-400" />
+                <Activity className="h-4 w-4 text-slate-300" />
                 <h2 className="text-sm font-semibold text-white">
                   Quorum Status
                 </h2>
@@ -967,17 +967,17 @@ export function OracleRoom() {
             </div>
 
             {/* vote bar */}
-            <div className="relative h-5 w-full overflow-hidden rounded-full bg-slate-900">
+            <div className="relative h-5 w-full overflow-hidden rounded-full bg-slate-900/90 border border-white/6">
               {/* YES fill */}
               <motion.div
-                className="absolute inset-y-0 left-0 rounded-l-full bg-linear-to-r from-emerald-500 to-emerald-400"
+                className="absolute inset-y-0 left-0 rounded-l-full bg-emerald-400/85"
                 initial={{ width: 0 }}
                 animate={{ width: `${yesPct}%` }}
                 transition={{ duration: 0.6, ease: 'easeOut' }}
               />
               {/* NO fill (from right) */}
               <motion.div
-                className="absolute inset-y-0 right-0 rounded-r-full bg-linear-to-l from-rose-500 to-rose-400"
+                className="absolute inset-y-0 right-0 rounded-r-full bg-rose-400/80"
                 initial={{ width: 0 }}
                 animate={{ width: `${noPct}%` }}
                 transition={{ duration: 0.6, ease: 'easeOut' }}
@@ -1034,10 +1034,10 @@ export function OracleRoom() {
           </div>
 
           {/* ── Agent Swarm ────────────────────────────────────────────────── */}
-          <div className="rounded-2xl border border-white/6 bg-[#070c1a] p-5">
+          <div className="rounded-2xl border border-white/8 bg-slate-950/85 p-5">
             <div className="mb-4 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Fingerprint className="h-4 w-4 text-violet-400" />
+                <Fingerprint className="h-4 w-4 text-slate-300" />
                 <h2 className="text-sm font-semibold text-white">
                   Agent Swarm
                 </h2>
@@ -1053,7 +1053,7 @@ export function OracleRoom() {
               ))}
               {agents.length === 0 && (
                 <div className="col-span-2 rounded-xl border border-white/5 bg-slate-900/40 px-4 py-10 text-center">
-                  <CircleDashed className="mx-auto mb-2 h-6 w-6 text-slate-700" />
+                  <CircleDashed className="mx-auto mb-2 h-6 w-6 text-slate-600" />
                   <p className="text-sm text-slate-600">
                     No session loaded yet.
                   </p>
@@ -1066,10 +1066,10 @@ export function OracleRoom() {
           </div>
 
           {/* ── Live Log ───────────────────────────────────────────────────── */}
-          <div className="rounded-2xl border border-white/6 bg-[#070c1a] p-5">
+          <div className="rounded-2xl border border-white/8 bg-slate-950/85 p-5">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <Database className="h-4 w-4 text-violet-400" />
+                <Database className="h-4 w-4 text-slate-300" />
                 <h2 className="text-sm font-semibold text-white">
                   Event Stream
                 </h2>
@@ -1088,8 +1088,8 @@ export function OracleRoom() {
                     className={cn(
                       'rounded-md border px-2.5 py-1 font-mono text-[9px] tracking-wider uppercase transition-colors',
                       logFilter === f
-                        ? 'border-violet-500/40 bg-violet-950/50 text-violet-300'
-                        : 'border-white/6 bg-slate-900 text-slate-600 hover:text-slate-400',
+                        ? 'border-indigo-400/35 bg-slate-900 text-indigo-300'
+                        : 'border-white/8 bg-slate-900 text-slate-600 hover:text-slate-400',
                     )}
                   >
                     {f}
@@ -1116,9 +1116,9 @@ export function OracleRoom() {
         {/* ── Right Sidebar ────────────────────────────────────────────────── */}
         <div className="space-y-5">
           {/* ── Proof & Chain Links ─────────────────────────────────────────── */}
-          <div className="rounded-2xl border border-white/6 bg-[#070c1a] p-5">
+          <div className="rounded-2xl border border-white/8 bg-slate-950/85 p-5">
             <div className="mb-4 flex items-center gap-2">
-              <Fingerprint className="h-4 w-4 text-violet-400" />
+              <Fingerprint className="h-4 w-4 text-slate-300" />
               <h2 className="text-sm font-semibold text-white">
                 Proof & Chain Links
               </h2>
@@ -1153,7 +1153,7 @@ export function OracleRoom() {
                 onCopy={copy}
               />
               {calibrationTxs.length > 1 && (
-                <div className="rounded-xl border border-white/6 bg-[#0a0f1e] p-3.5">
+                <div className="rounded-xl border border-white/8 bg-slate-950/90 p-3.5">
                   <div className="mb-2 flex items-center gap-1.5">
                     <Database className="h-3 w-3 text-slate-600" />
                     <span className="font-mono text-[9px] font-semibold tracking-widest text-slate-600 uppercase">
@@ -1195,7 +1195,7 @@ export function OracleRoom() {
           </div>
 
           {/* ── Settlement Readiness ─────────────────────────────────────────── */}
-          <div className="rounded-2xl border border-white/6 bg-[#070c1a] p-5">
+          <div className="rounded-2xl border border-white/8 bg-slate-950/85 p-5">
             <div className="mb-4 flex items-center gap-2">
               <Zap className="h-4 w-4 text-amber-400" />
               <h2 className="text-sm font-semibold text-white">
@@ -1293,7 +1293,7 @@ export function OracleRoom() {
           </div>
 
           {/* ── Cross-chain Status Sync ─────────────────────────────────────── */}
-          <div className="rounded-2xl border border-white/6 bg-[#070c1a] p-5">
+          <div className="rounded-2xl border border-white/8 bg-slate-950/85 p-5">
             <div className="mb-4 flex items-center gap-2">
               <Activity className="h-4 w-4 text-cyan-400" />
               <h2 className="text-sm font-semibold text-white">
@@ -1301,7 +1301,7 @@ export function OracleRoom() {
               </h2>
             </div>
             <div className="space-y-2 font-mono text-[11px]">
-              <div className="flex items-center justify-between rounded-lg border border-white/6 bg-[#0a0f1e] px-3 py-2">
+              <div className="flex items-center justify-between rounded-lg border border-white/8 bg-slate-950/90 px-3 py-2">
                 <span className="text-slate-500">Sepolia (canonical)</span>
                 <span
                   className={cn(
@@ -1315,7 +1315,7 @@ export function OracleRoom() {
                   {sepoliaSync.status}
                 </span>
               </div>
-              <div className="flex items-center justify-between rounded-lg border border-white/6 bg-[#0a0f1e] px-3 py-2">
+              <div className="flex items-center justify-between rounded-lg border border-white/8 bg-slate-950/90 px-3 py-2">
                 <span className="text-slate-500">Flow (mirrored)</span>
                 <span
                   className={cn(
@@ -1364,7 +1364,7 @@ export function OracleRoom() {
 
           {/* ── Session Metadata ─────────────────────────────────────────────── */}
           {session && (
-            <div className="rounded-2xl border border-white/6 bg-[#070c1a] p-5">
+            <div className="rounded-2xl border border-white/8 bg-slate-950/85 p-5">
               <div className="mb-4 flex items-center gap-2">
                 <Clock className="h-4 w-4 text-slate-600" />
                 <h2 className="text-sm font-semibold text-white">
