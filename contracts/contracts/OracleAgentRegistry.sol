@@ -6,16 +6,20 @@ import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
- * @title OracleAgentRegistry
+ * @title OracleAgentRegistry v2
  * @notice Filecoin Calibration testnet registry for GhostMarket oracle agents.
  *
- * Each oracle agent is registered with a Filecoin Piece CID (from Synapse SDK upload).
- * Post-resolution, evidence bundles and reputation snapshots are recorded by CID.
+ * v2 architecture: this contract is the Filecoin-layer source of truth for
+ * stake/suspension, per-market attestations, quorum finalization, and evidence
+ * CID anchors. Agent identity and portable reputation live in ERC-8004 on
+ * Ethereum Sepolia (IdentityRegistry + ReputationRegistry). The erc8004Id
+ * field here is the cross-reference pointer to that identity.
  *
  * Filecoin bounty coverage:
- *  - Track 2 (Onchain Agent Registry): this contract is the registry
- *  - Track 3 (Portable Identity): reputation history is a CID chain on Filecoin
- *  - Track 4 (Autonomous Agent Economy): stake/slash under USDFC-gated storage costs
+ *  - Track 2 (Onchain Agent Registry): stake, active status, quorum state
+ *  - Track 3 (Portable Identity): evidence CID chain anchored on Filecoin;
+ *    reputation portability via ERC-8004 (Sepolia) referenced by erc8004Id
+ *  - Track 4 (Autonomous Agent Economy): stake/slash under USDFC-gated ops
  */
 contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
 
@@ -23,31 +27,28 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
 
     struct Agent {
         address owner;
-        string  metadataCID;      // Piece CID of agent metadata JSON on Filecoin
-        uint256 stake;            // staked collateral (in wei)
-        bool    active;
-        uint256 reputationScore;  // 0–100
-        uint256 correctVotes;
-        uint256 totalVotes;
-        uint256 erc8004Id;        // ERC-8004 identity token ID on Sepolia (0 = not linked)
+        string  metadataCID;   // Piece CID of agent metadata JSON on Filecoin
+        uint256 stake;         // staked collateral (in wei)
+        bool    active;        // suspension gate for market participation
+        uint256 correctVotes;  // quorum accuracy counter
+        uint256 totalVotes;    // total attestations submitted
+        uint256 erc8004Id;     // ERC-8004 identity token ID on Sepolia (0 = not linked)
     }
 
     // ── Storage ────────────────────────────────────────────────────────────
 
     mapping(uint256 => Agent)                              public agents;
-    mapping(uint256 => string[])                           public reputationHistory;    // agentId → CID chain
-    mapping(uint256 => mapping(uint256 => string))         public evidenceCIDs;         // agentId → marketId → CID
-    mapping(uint256 => string)                             public slashCIDs;            // agentId → latest slash record CID
-    mapping(uint256 => uint256[])                          public marketAgents;         // marketId → agentIds that attested
-    mapping(uint256 => mapping(uint256 => bool))           public attestations;         // agentId → marketId → attested
-    mapping(uint256 => mapping(uint256 => bool))           public votes;               // agentId → marketId → vote (YES=true)
+    mapping(uint256 => mapping(uint256 => string))         public evidenceCIDs;   // agentId → marketId → CID
+    mapping(uint256 => string)                             public slashCIDs;      // agentId → latest slash record CID
+    mapping(uint256 => uint256[])                          public marketAgents;   // marketId → agentIds that attested
+    mapping(uint256 => mapping(uint256 => bool))           public attestations;   // agentId → marketId → attested
+    mapping(uint256 => mapping(uint256 => bool))           public votes;          // agentId → marketId → vote (YES=true)
     mapping(uint256 => bool)                               public marketFinalized;
     mapping(uint256 => bool)                               public marketOutcome;
 
     uint256 public agentCount;
-    uint256 public constant INITIAL_REPUTATION = 80;
-    uint256 public constant SLASH_PERCENT       = 10;
-    uint256 public quorumThreshold;   // set in constructor — e.g. 3-of-4 for demo, 5-of-7 for prod
+    uint256 public constant SLASH_PERCENT = 10;
+    uint256 public quorumThreshold;   // configurable: e.g. 3-of-4 for demo, 5-of-7 for prod
 
     // ── Events ─────────────────────────────────────────────────────────────
 
@@ -58,13 +59,13 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
         uint256 stake,
         uint256 erc8004Id
     );
-    event ReputationUpdated(uint256 indexed agentId, string repCID, uint256 newScore);
     event EvidenceRecorded(uint256 indexed agentId, uint256 indexed marketId, string evidenceCID);
     event AttestationSubmitted(uint256 indexed agentId, uint256 indexed marketId, bool vote);
     event MarketFinalized(uint256 indexed marketId, bool outcome, uint256 yesVotes, uint256 noVotes, string evidenceBundleCID);
     event AgentSlashed(uint256 indexed agentId, uint256 slashAmount, string slashCID);
     event AgentSuspended(uint256 indexed agentId);
     event ERC8004Linked(uint256 indexed agentId, uint256 erc8004Id);
+    event QuorumThresholdUpdated(uint256 previousThreshold, uint256 nextThreshold);
 
     // ── Constructor ────────────────────────────────────────────────────────
 
@@ -78,6 +79,7 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
     /**
      * @notice Register an oracle agent. Caller must have uploaded metadata JSON
      *         to Filecoin via Synapse SDK first; pass the returned Piece CID.
+     *         Agent identity and reputation are managed in ERC-8004 on Sepolia.
      */
     function register(
         uint256 agentId,
@@ -88,14 +90,13 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
         require(bytes(metadataCID).length > 0,        "Empty CID");
 
         agents[agentId] = Agent({
-            owner:           msg.sender,
-            metadataCID:     metadataCID,
-            stake:           msg.value,
-            active:          true,
-            reputationScore: INITIAL_REPUTATION,
-            correctVotes:    0,
-            totalVotes:      0,
-            erc8004Id:       erc8004Id
+            owner:        msg.sender,
+            metadataCID:  metadataCID,
+            stake:        msg.value,
+            active:       true,
+            correctVotes: 0,
+            totalVotes:   0,
+            erc8004Id:    erc8004Id
         });
         agentCount++;
 
@@ -103,7 +104,9 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     /**
-     * @notice Link an ERC-8004 identity token ID to an existing agent.
+     * @notice Link or update the ERC-8004 identity token ID for an agent.
+     *         The ERC-8004 registry on Sepolia is the canonical identity +
+     *         reputation source; this is a cross-reference pointer only.
      */
     function linkERC8004(uint256 agentId, uint256 erc8004Id) external {
         require(agents[agentId].owner == msg.sender, "Not agent owner");
@@ -136,7 +139,6 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
 
         agent.totalVotes++;
 
-        // Store intermediate Storacha CID
         if (bytes(intermediateEvidenceCID).length > 0) {
             evidenceCIDs[agentId][marketId] = intermediateEvidenceCID;
         }
@@ -146,7 +148,7 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
         _tryFinalize(marketId);
     }
 
-    // ── Evidence and Reputation ────────────────────────────────────────────
+    // ── Evidence ───────────────────────────────────────────────────────────
 
     /**
      * @notice Record finalized evidence bundle CID (from Synapse SDK upload).
@@ -165,42 +167,20 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
         emit EvidenceRecorded(agentId, marketId, evidenceCID);
     }
 
-    /**
-     * @notice Update reputation after resolution; upload repCID via Synapse first.
-     */
-    function updateReputation(
-        uint256 agentId,
-        string  calldata repCID,
-        uint256 newScore
-    ) external onlyOwner {
-        require(agents[agentId].owner != address(0), "Agent not found");
-        require(newScore <= 100, "Score out of range");
-
-        agents[agentId].reputationScore = newScore;
-        reputationHistory[agentId].push(repCID);
-
-        emit ReputationUpdated(agentId, repCID, newScore);
-    }
-
     // ── Slashing ───────────────────────────────────────────────────────────
 
     /**
-     * @notice Slash an agent for incorrect final-side vote.
-     *         slashCID is the Filecoin Piece CID of the slash record.
+     * @notice Slash an agent for an incorrect final-side vote.
+     *         slashCID is the Filecoin Piece CID of the slash record (Synapse upload).
+     *         Reputation impact is posted separately to ERC-8004 on Sepolia.
      */
     function slash(uint256 agentId, string calldata slashCID) external onlyOwner nonReentrant {
         Agent storage agent = agents[agentId];
         require(agent.owner != address(0), "Agent not found");
 
-        uint256 slashAmount  = (agent.stake * SLASH_PERCENT) / 100;
-        agent.stake         -= slashAmount;
-        slashCIDs[agentId]   = slashCID;
-
-        if (agent.reputationScore >= 10) {
-            agent.reputationScore -= 10;
-        } else {
-            agent.reputationScore = 0;
-        }
+        uint256 slashAmount = (agent.stake * SLASH_PERCENT) / 100;
+        agent.stake        -= slashAmount;
+        slashCIDs[agentId]  = slashCID;
 
         emit AgentSlashed(agentId, slashAmount, slashCID);
     }
@@ -212,10 +192,6 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
 
     // ── Views ──────────────────────────────────────────────────────────────
 
-    function getReputationHistory(uint256 agentId) external view returns (string[] memory) {
-        return reputationHistory[agentId];
-    }
-
     function getMarketAttesters(uint256 marketId) external view returns (uint256[] memory) {
         return marketAgents[marketId];
     }
@@ -225,7 +201,6 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
         string   memory metadataCID,
         uint256  stake,
         bool     active,
-        uint256  reputationScore,
         uint256  correctVotes,
         uint256  totalVotes,
         uint256  erc8004Id
@@ -236,7 +211,6 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
             a.metadataCID,
             a.stake,
             a.active,
-            a.reputationScore,
             a.correctVotes,
             a.totalVotes,
             a.erc8004Id
@@ -304,7 +278,6 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
         marketFinalized[marketId] = true;
         marketOutcome[marketId]   = outcome;
 
-        // Update correctVotes for agents on the winning side
         for (uint256 i = 0; i < attesters.length; i++) {
             if (votes[attesters[i]][marketId] == outcome) {
                 agents[attesters[i]].correctVotes++;
@@ -318,6 +291,16 @@ contract OracleAgentRegistry is Ownable2Step, Pausable, ReentrancyGuard {
 
     function pause()   external onlyOwner { _pause();   }
     function unpause() external onlyOwner { _unpause(); }
+
+    /**
+     * @notice Update quorum threshold without redeploy (demo → prod tuning).
+     */
+    function setQuorumThreshold(uint256 _quorumThreshold) external onlyOwner {
+        require(_quorumThreshold > 0, "Threshold must be > 0");
+        uint256 previous = quorumThreshold;
+        quorumThreshold  = _quorumThreshold;
+        emit QuorumThresholdUpdated(previous, _quorumThreshold);
+    }
 
     receive() external payable {}
 

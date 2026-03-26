@@ -1,8 +1,11 @@
 /**
  * registry-client.ts
  *
- * Interacts with OracleAgentRegistry.sol deployed on Filecoin Calibration testnet.
- * All oracle agent state that needs permanent, PDP-verified storage lives here.
+ * Interacts with OracleAgentRegistry v2 deployed on Filecoin Calibration testnet.
+ *
+ * v2 scope: stake/suspension, per-market attestations, quorum finalization,
+ * and Filecoin evidence CID anchors. Agent identity and reputation signals
+ * live in ERC-8004 on Ethereum Sepolia (see erc8004-client.ts).
  */
 
 import { ethers } from 'ethers';
@@ -14,7 +17,7 @@ const CALIBRATION_RPC      = process.env.CALIBRATION_RPC_URL ?? 'https://filecoi
 const CALIBRATION_CHAIN_ID = 314159;
 const NUMERIC_MARKET_ID_RE = /^\d+$/;
 
-// ── Minimal ABI (mirrors OracleAgentRegistry.sol) ─────────────────────────────
+// ── Minimal ABI (mirrors OracleAgentRegistry v2) ───────────────────────────────
 
 const REGISTRY_ABI = [
   // Registration
@@ -24,27 +27,27 @@ const REGISTRY_ABI = [
   // Attestation
   'function submitAttestation(uint256 agentId, uint256 marketId, bool vote, string calldata intermediateEvidenceCID) external',
 
-  // Evidence + reputation
+  // Evidence
   'function recordEvidence(uint256 agentId, uint256 marketId, string calldata evidenceCID) external',
-  'function updateReputation(uint256 agentId, string calldata repCID, uint256 newScore) external',
 
-  // Slashing
+  // Slashing + suspension
   'function slash(uint256 agentId, string calldata slashCID) external',
   'function suspend(uint256 agentId) external',
+  'function setQuorumThreshold(uint256 _quorumThreshold) external',
 
   // Views
-  'function getAgentInfo(uint256 agentId) external view returns (address owner, string memory metadataCID, uint256 stake, bool active, uint256 reputationScore, uint256 correctVotes, uint256 totalVotes, uint256 erc8004Id)',
+  'function getAgentInfo(uint256 agentId) external view returns (address owner, string memory metadataCID, uint256 stake, bool active, uint256 correctVotes, uint256 totalVotes, uint256 erc8004Id)',
   'function getQuorumStatus(uint256 marketId) external view returns (uint256 totalAttestations, uint256 yesVotes, uint256 noVotes, bool quorumReached, bool finalized, bool outcome)',
-  'function getReputationHistory(uint256 agentId) external view returns (string[] memory)',
   'function getMarketAttesters(uint256 marketId) external view returns (uint256[] memory)',
   'function agentCount() external view returns (uint256)',
+  'function quorumThreshold() external view returns (uint256)',
 
   // Events
   'event AgentRegistered(uint256 indexed agentId, address indexed owner, string metadataCID, uint256 stake, uint256 erc8004Id)',
   'event AttestationSubmitted(uint256 indexed agentId, uint256 indexed marketId, bool vote)',
   'event MarketFinalized(uint256 indexed marketId, bool outcome, uint256 yesVotes, uint256 noVotes, string evidenceBundleCID)',
-  'event ReputationUpdated(uint256 indexed agentId, string repCID, uint256 newScore)',
   'event AgentSlashed(uint256 indexed agentId, uint256 slashAmount, string slashCID)',
+  'event QuorumThresholdUpdated(uint256 previousThreshold, uint256 nextThreshold)',
 ];
 
 // ── Provider / Signer ──────────────────────────────────────────────────────────
@@ -115,7 +118,6 @@ function marketIdToUint256(marketId: string | number): bigint {
   if (typeof marketId === 'number') return BigInt(marketId);
   const trimmed = marketId.trim();
   if (NUMERIC_MARKET_ID_RE.test(trimmed)) return BigInt(trimmed);
-  // Derive a stable uint256 from an arbitrary string ID
   return BigInt(ethers.keccak256(ethers.toUtf8Bytes(trimmed)));
 }
 
@@ -136,13 +138,11 @@ export async function submitAttestation(
       return receipt.hash as string;
     } catch (err) {
       const msg = (err as Error).message ?? '';
-      // These are expected in re-runs or when agent is not yet registered — not fatal.
       if (msg.includes('Already attested')) {
         console.log(`[Registry] Agent ${agentId} market ${marketId} — already attested, skipping`);
         return '';
       }
       if (msg.includes('Market finalized')) {
-        // On-chain quorum was reached by earlier agents in the write queue — correct behaviour.
         console.log(`[Registry] Agent ${agentId} market ${marketId} — on-chain quorum already reached, skipping`);
         return '';
       }
@@ -150,12 +150,12 @@ export async function submitAttestation(
         console.log(`[Registry] Agent ${agentId} not registered on Calibration — run register-agents.ts to fix`);
         return '';
       }
-      throw err; // re-throw unexpected errors
+      throw err;
     }
   });
 }
 
-// ── Evidence + Reputation ──────────────────────────────────────────────────────
+// ── Evidence ───────────────────────────────────────────────────────────────────
 
 export async function recordEvidence(
   agentId: number,
@@ -166,31 +166,28 @@ export async function recordEvidence(
     const registry   = getRegistry();
     const marketUint = marketIdToUint256(marketId);
     const tx         = await registry.recordEvidence(agentId, marketUint, evidenceCID);
-    const receipt  = await tx.wait();
+    const receipt    = await tx.wait();
     console.log(`[Registry] ✓ Evidence CID recorded for agent ${agentId} market ${marketId}`);
     return receipt.hash as string;
   });
 }
 
-export async function updateReputation(
-  agentId: number,
-  repCID: string,
-  newScore: number,
-): Promise<string> {
-  return enqueueWrite(async () => {
-    const registry = getRegistry();
-    console.log(`[Registry] Updating reputation for agent ${agentId} → score=${newScore}, CID=${repCID}...`);
-    const tx      = await registry.updateReputation(agentId, repCID, newScore);
-    const receipt = await tx.wait();
-    console.log(`[Registry] ✓ Reputation updated (tx: ${receipt.hash})`);
-    return receipt.hash as string;
-  });
-}
+// ── Slashing + suspension ──────────────────────────────────────────────────────
 
 export async function slashAgent(agentId: number, slashCID: string): Promise<string> {
   return enqueueWrite(async () => {
     const registry = getRegistry();
     const tx       = await registry.slash(agentId, slashCID);
+    const receipt  = await tx.wait();
+    return receipt.hash as string;
+  });
+}
+
+export async function setQuorumThreshold(next: number): Promise<string> {
+  return enqueueWrite(async () => {
+    if (next <= 0) throw new Error('quorum threshold must be > 0');
+    const registry = getRegistry();
+    const tx       = await registry.setQuorumThreshold(BigInt(next));
     const receipt  = await tx.wait();
     return receipt.hash as string;
   });
@@ -202,14 +199,13 @@ export async function getAgentInfo(agentId: number) {
   const registry = getRegistry(true);
   const result   = await registry.getAgentInfo(agentId);
   return {
-    owner:           result[0] as string,
-    metadataCID:     result[1] as string,
-    stake:           result[2] as bigint,
-    active:          result[3] as boolean,
-    reputationScore: Number(result[4]),
-    correctVotes:    Number(result[5]),
-    totalVotes:      Number(result[6]),
-    erc8004Id:       result[7] as bigint,
+    owner:        result[0] as string,
+    metadataCID:  result[1] as string,
+    stake:        result[2] as bigint,
+    active:       result[3] as boolean,
+    correctVotes: Number(result[4]),
+    totalVotes:   Number(result[5]),
+    erc8004Id:    result[6] as bigint,
   };
 }
 

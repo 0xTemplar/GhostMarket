@@ -33,7 +33,38 @@ function isNumericId(id: string): boolean {
   return /^\d+$/.test(id);
 }
 
+type ActivityItem = {
+  user: string;
+  side: 'YES' | 'NO';
+  priceCents: number;
+  amount: string;
+  minsAgo: number;
+};
+
 const FLOWSCAN = 'https://evm-testnet.flowscan.io';
+
+function buildRecentActivity(market: Market): ActivityItem[] {
+  const yesPct = Math.round(market.yesPrice * 100);
+  const baseTrade = Math.max(40, Math.round(market.liquidity / 12000));
+  const users = ['0x7a3f…', '0x9c1a…', 'alexa', 'mori', '0x5b2d…', 'taro'];
+  const minuteOffsets = [2, 5, 9, 13, 18, 26];
+
+  return minuteOffsets.map((minsAgo, i) => {
+    const swing = (i % 3) - 1; // -1, 0, +1
+    const side: 'YES' | 'NO' = i % 2 === 0 ? 'YES' : 'NO';
+    const priceCents = side === 'YES'
+      ? Math.min(99, Math.max(1, yesPct + swing))
+      : Math.min(99, Math.max(1, 100 - yesPct + swing));
+
+    return {
+      user: users[i % users.length],
+      side,
+      priceCents,
+      amount: `$${(baseTrade + i * 12).toLocaleString()}`,
+      minsAgo,
+    };
+  });
+}
 
 // ─── On-chain market actions panel ───────────────────────────────────────────
 
@@ -335,6 +366,11 @@ export default function MarketDetailPage() {
     active: 'Active', resolved: 'Resolved', disputed: 'Disputed', pending: 'Pending',
   };
   const canBet = market.status === 'active' && !marketFullyPriced && !sepoliaClosed;
+  const recentActivity = buildRecentActivity(market);
+  const relatedMarkets = mockMarkets
+    .filter((m) => m.category === market.category && m.id !== market.id)
+    .slice(0, 3);
+  const buyPressure = Math.round((market.yesPrice / (market.yesPrice + market.noPrice)) * 100);
 
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
@@ -429,6 +465,75 @@ export default function MarketDetailPage() {
                 </div>
               </div>
               <AreaChart data={market.priceHistory} height={220} />
+            </div>
+
+            <div className="rounded-2xl border border-white/8 bg-slate-950/85 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold text-white">Market Activity</h3>
+                <span className="text-[11px] text-slate-500">Recent fills</span>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2.5">
+                  {recentActivity.map((item, i) => (
+                    <div
+                      key={`${item.user}-${i}`}
+                      className="flex items-center justify-between rounded-lg border border-white/8 bg-slate-900/90 px-3 py-2.5"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="font-mono text-slate-400">{item.user}</span>
+                          <span className={cn(
+                            'rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide',
+                            item.side === 'YES'
+                              ? 'bg-emerald-500/10 text-emerald-300'
+                              : 'bg-rose-500/10 text-rose-300'
+                          )}>
+                            {item.side}
+                          </span>
+                          <span className="text-slate-500">{item.priceCents}¢</span>
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          {item.minsAgo}m ago
+                        </div>
+                      </div>
+                      <div className="text-sm font-mono text-slate-300">{item.amount}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-white/8 bg-slate-900/90 px-3.5 py-3">
+                    <div className="text-[11px] text-slate-500 mb-1">Buy pressure</div>
+                    <div className="text-xl font-bold text-white">{buyPressure}% YES</div>
+                    <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-400/80"
+                        style={{ width: `${buyPressure}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-white/8 bg-slate-900/90 px-3.5 py-3">
+                    <div className="text-[11px] text-slate-500 mb-1">Avg fill size</div>
+                    <div className="text-xl font-bold text-white">
+                      ${(Math.round((market.volume / Math.max(market.tradersCount, 1)) * 10) / 10).toLocaleString()}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-1">Approximate per trader participation</div>
+                  </div>
+
+                  <div className="rounded-lg border border-white/8 bg-slate-900/90 px-3.5 py-3">
+                    <div className="text-[11px] text-slate-500 mb-1">Volatility (24h)</div>
+                    <div className={cn(
+                      'text-xl font-bold',
+                      isPositiveChange ? 'text-emerald-300' : 'text-rose-300'
+                    )}>
+                      {formatPercent(market.change24h)}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-1">Price move vs previous 24h window</div>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div className="rounded-2xl border border-white/5 bg-slate-900 p-5">
@@ -562,6 +667,30 @@ export default function MarketDetailPage() {
 
               {/* User position + claim panel (on-chain only) */}
               {rawMarket && <OnChainActions market={market} raw={rawMarket} />}
+
+              <div className="rounded-2xl border border-white/8 bg-slate-950/85 p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-semibold text-white">Related Markets</h3>
+                  <span className="text-[11px] text-slate-500">{market.category}</span>
+                </div>
+                <div className="space-y-2.5">
+                  {relatedMarkets.length > 0 ? relatedMarkets.map((item) => (
+                    <Link
+                      key={item.id}
+                      href={`/markets/${item.id}`}
+                      className="block rounded-lg border border-white/8 bg-slate-900/90 p-3 hover:border-white/14 transition-colors"
+                    >
+                      <div className="text-sm text-white line-clamp-2 leading-snug mb-2">{item.title}</div>
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-slate-500">YES {Math.round(item.yesPrice * 100)}¢</span>
+                        <span className="text-slate-500">Vol {formatVolume(item.volume)}</span>
+                      </div>
+                    </Link>
+                  )) : (
+                    <p className="text-sm text-slate-500">No related markets yet.</p>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>

@@ -39,7 +39,7 @@ import {
   saveIntermediateEvidence, saveAgentCheckpoint,
   loadAllCheckpoints, readPeerEvidence, getAllHeads,
 } from './storacha-client';
-import { submitAttestation, recordEvidence, updateReputation, getAgentInfo, getAgentCount } from './registry-client';
+import { submitAttestation, recordEvidence, getAgentInfo, getAgentCount } from './registry-client';
 import { postERC8004Reputation }                       from './erc8004-client';
 import {
   markMarketFinalized, getOrComputeSettlement, deliverSettlementOnChain,
@@ -538,17 +538,10 @@ async function finalizeResolution(session: ResolutionSession) {
       let repCid = '';
       try {
         repCid = await uploadToFilecoin(repSnapshot, `agent-${agent.id}-rep-snapshot`);
-        const repTxHash = await updateReputation(agent.id, repCid, newScore);
-        addLog(session, `agent-${agent.id} rep → Filecoin CID: ${repCid.slice(0, 20)}...`, {
+        addLog(session, `agent-${agent.id} rep snapshot → Filecoin CID: ${repCid.slice(0, 20)}...`, {
           agentName: agent.name,
           cid:       repCid,
         });
-        if (repTxHash) {
-          addLog(session, `reputation updated on Calibration for agent-${agent.id}`, {
-            agentName: agent.name,
-            txHash: repTxHash,
-          });
-        }
       } catch (err) {
         console.warn(`[Synapse] Rep snapshot for agent ${agent.id} failed:`, (err as Error).message);
       }
@@ -924,7 +917,6 @@ app.post('/oracle/reputation/update', async (req, res) => {
         let repCid = '';
         try {
           repCid = await uploadToFilecoin(snapshot, `agent-${agent.id}-rep`);
-          await updateReputation(agent.id, repCid, newScore);
         } catch { /* not fatal in dev */ }
 
         if (agent.erc8004Id !== null) {

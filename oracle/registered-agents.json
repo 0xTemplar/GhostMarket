@@ -3,33 +3,33 @@
     "id": 1,
     "name": "Cipher",
     "address": "0x110Cd85FA8E7329b480355e5E1DA99BE7F28AAB0",
-    "metadataCid": "bafkzcibdx4bqkkup35gmjzeu4l64e34rfkvtjuyyz2qdmhkm7d56zpjjfgdmplqi",
-    "erc8004Id": "1747",
-    "calibrationTx": "0x0bb4abc54409a12a78c98ca5e002a771a5ad91d4654016e4d67e5d3ae4dc2774"
+    "metadataCid": "bafkzcibdx4bql6x3pmz7q7mmmxfvoh2k5uqjwjfxttg4vbswktzocngi5slu46as",
+    "erc8004Id": "2276",
+    "calibrationTx": "0x04dddbc2a3ad8b9d1c832a1376ff432a80288a23137feb4c07ecb7a9f385886d"
   },
   {
     "id": 2,
     "name": "Specter",
     "address": "0xEeF50e635bf93293a6AF6414E25AbF13B0c8A551",
-    "metadataCid": "bafkzcibdxqbqlkfepyhnjwczkg2vpfgreibgnhjs2x6yjx5od7tbk2zth4b4murq",
-    "erc8004Id": "1748",
-    "calibrationTx": "0x8f66e106123f59fcbcb4a116479624edcc15a5131bf2a21bb989844d02669f27"
+    "metadataCid": "bafkzcibdxqbqku5ut5l5ccre4bdqtu4v6jpwla7t44ozbjizpojuu66okovuo4bq",
+    "erc8004Id": "2277",
+    "calibrationTx": "0x243cb9ae97d7a259c055642f31d12476abfcd9b7cd49be0aebe43ba1e5135435"
   },
   {
     "id": 3,
     "name": "Wraith",
     "address": "0x48F6D48Cfa1aE960bf284e1d7C3c8fA13bC63d88",
-    "metadataCid": "bafkzcibdxubqlwxve74xhaibatzoopsrs7fbguilg6bkttbpl6qznvvkulnbhnjg",
-    "erc8004Id": "1749",
-    "calibrationTx": "0xcf958dce8e0082958b13b6b8733f9ab75bc177bbad7d8f252c1ce8130a4c8abe"
+    "metadataCid": "bafkzcibdxubqkyjgsl4rxrevx6zkzaksirrybzocxtls7zjb3antxbk5hp7zutzm",
+    "erc8004Id": "2278",
+    "calibrationTx": "0xda561c612e1dd5cd3094da43a04510728341a8e5c421a3f0cb9a607674ca73e6"
   },
   {
     "id": 4,
     "name": "Phantom",
     "address": "0x72bf54C6CC1d675ec4dFbdC967469088036d738c",
-    "metadataCid": "bafkzcibdxubqkih2auxj7qz76tecwngh2dzjzrpm3ydxfyirfssiulbkdez5s4zb",
-    "erc8004Id": "1750",
-    "calibrationTx": "0x46bb58e412ac60c84a66cfccb465cbcbd9c81dbb56ae4dd70f64736ed18b52dc"
+    "metadataCid": "bafkzcibdxubqkk4fbywibqzhltbpnojkou66v7gmoxi2ztagxgji7f5mhygqcsya",
+    "erc8004Id": "2279",
+    "calibrationTx": "0x4eddbf820cf78a9b93baa69774fd2fe8888a23e319cb62eed52799df2930fb6a"
   },
   {
     "id": 5,
