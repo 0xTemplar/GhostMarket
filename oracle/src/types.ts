@@ -11,11 +11,13 @@ export type AgentStatus =
 export interface OracleAgent {
   id: number;           // 1–7
   name: string;         // Ghost-01 … Ghost-07
+  source?: string;
   walletAddress: string;
   reputationScore: number;
   erc8004Id: bigint | null;
   status: AgentStatus;
   vote: boolean | null;
+  reasoning?: string;
   storachaCid: string | null;   // intermediate evidence CID (Storacha)
   filecoinCid: string | null;   // finalized evidence CID (Synapse/Filecoin)
   attestedAt: number | null;    // unix ms

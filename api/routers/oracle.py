@@ -12,6 +12,7 @@ WebSocket:
 
 import asyncio
 import json
+import os
 from typing import Any
 
 import httpx
@@ -26,7 +27,7 @@ router = APIRouter()
 
 _sessions: dict[int, ResolutionSession] = {}
 
-ORACLE_SERVICE_URL = "http://localhost:8080"
+ORACLE_SERVICE_URL = os.getenv("ORACLE_SERVICE_URL", "http://localhost:8092")
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 

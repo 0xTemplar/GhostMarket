@@ -35,6 +35,8 @@ export interface OracleAgentView {
   storachaCid: string | null;
   filecoinCid: string | null;
   attestedAt: number | null;
+  reasoning?: string;
+  source?: string;
 }
 
 export interface OracleLogEntry {
@@ -66,6 +68,74 @@ export interface OracleSession {
   startedAt: number;
   finalizedAt: number | null;
   log: OracleLogEntry[];
+}
+
+const ORACLE_AI_BASE = process.env.NEXT_PUBLIC_ORACLE_AI_URL ?? 'http://localhost:8000';
+
+function normalizeOracleSession(raw: Record<string, unknown>): OracleSession {
+  const agents = (Array.isArray(raw.agents) ? raw.agents : []).map((a) => {
+    const agent = a as Record<string, unknown>;
+    return {
+      id: Number(agent.id ?? 0),
+      name: String(agent.name ?? `Agent-${String(agent.id ?? '')}`),
+      walletAddress: String(agent.walletAddress ?? ''),
+      reputationScore: Number(agent.reputationScore ?? agent.reputation ?? 80),
+      erc8004Id: agent.erc8004Id ? String(agent.erc8004Id) : null,
+      status: String(agent.status ?? 'idle') as OracleAgentView['status'],
+      vote: typeof agent.vote === 'boolean' ? agent.vote : null,
+      storachaCid: agent.storachaCid ? String(agent.storachaCid) : null,
+      filecoinCid: agent.filecoinCid ? String(agent.filecoinCid) : null,
+      attestedAt: agent.attestedAt ? Number(agent.attestedAt) : null,
+      reasoning: agent.reasoning ? String(agent.reasoning) : undefined,
+      source: agent.source ? String(agent.source) : undefined,
+    } as OracleAgentView;
+  });
+
+  const log = (Array.isArray(raw.log) ? raw.log : []).map((l) => {
+    const entry = l as Record<string, unknown>;
+    return {
+      ts: Number(entry.ts ?? Date.now()),
+      agentName: entry.agentName
+        ? String(entry.agentName)
+        : entry.agent
+        ? String(entry.agent)
+        : null,
+      message: String(entry.message ?? ''),
+      txHash: entry.txHash ? String(entry.txHash) : null,
+      cid: entry.cid ? String(entry.cid) : null,
+    } as OracleLogEntry;
+  });
+
+  return {
+    marketId: String(raw.marketId ?? ''),
+    phase: String(raw.phase ?? 'pending') as OracleSession['phase'],
+    agents,
+    yesVotes: Number(raw.yesVotes ?? 0),
+    noVotes: Number(raw.noVotes ?? 0),
+    outcome: typeof raw.outcome === 'boolean' ? raw.outcome : null,
+    finalEvidenceCid: raw.finalEvidenceCid ? String(raw.finalEvidenceCid) : null,
+    calibrationTxHash: raw.calibrationTxHash
+      ? String(raw.calibrationTxHash)
+      : raw.calibrationTx
+      ? String(raw.calibrationTx)
+      : null,
+    flowTxHash: raw.flowTxHash
+      ? String(raw.flowTxHash)
+      : raw.flowTx
+      ? String(raw.flowTx)
+      : null,
+    sepoliaResolutionSync: (raw.sepoliaResolutionSync as OracleSession['sepoliaResolutionSync']) ?? {
+      status: 'idle',
+      txHash: null,
+    },
+    flowResolutionSync: (raw.flowResolutionSync as OracleSession['flowResolutionSync']) ?? {
+      status: 'idle',
+      txHash: null,
+    },
+    startedAt: Number(raw.startedAt ?? Date.now()),
+    finalizedAt: raw.finalizedAt ? Number(raw.finalizedAt) : null,
+    log,
+  };
 }
 
 // ── REST calls ────────────────────────────────────────────────────────────────
@@ -155,6 +225,44 @@ export async function getOracleSession(
   } catch {
     return null;
   }
+}
+
+/**
+ * Oracle Room AI session endpoint (FastAPI backend).
+ * Falls back to null if API backend is offline.
+ */
+export async function getOracleAiSession(
+  marketId: string | number,
+): Promise<OracleSession | null> {
+  try {
+    const res = await fetch(`${ORACLE_AI_BASE}/api/oracle/status/${marketId}`);
+    if (!res.ok) return null;
+    const raw = await res.json() as Record<string, unknown>;
+    return normalizeOracleSession(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Trigger AI-backed oracle run (FastAPI).
+ */
+export async function triggerOracleAiResolution(
+  marketId: string | number,
+  marketQuestion?: string,
+): Promise<{ marketId: string; status: string; wsUrl?: string }> {
+  const res = await fetch(`${ORACLE_AI_BASE}/api/oracle/resolve/${marketId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      market_question: marketQuestion ?? `Resolve market ${marketId} using agent consensus`,
+    }),
+  });
+  const body = await res.json().catch(() => ({ error: res.statusText }));
+  if (!res.ok) {
+    throw new Error(body.error ?? body.detail ?? `Oracle AI error ${res.status}`);
+  }
+  return body as { marketId: string; status: string; wsUrl?: string };
 }
 
 /**

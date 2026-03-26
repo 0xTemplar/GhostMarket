@@ -46,6 +46,8 @@ function isOnChainMarket(id: string): boolean {
 const FLOWSCAN_BASE  = 'https://evm-testnet.flowscan.io';
 // GhostEAMM runs on Ethereum Sepolia — link to Etherscan Sepolia
 const SEPOLIASCAN_BASE = 'https://sepolia.etherscan.io';
+const PROTOCOL_FEE_RATE = 0.02;
+const EFFECTIVE_CLOSE_PRICE = 0.999;
 
 function shortenHash(hash: string): string {
   return `${hash.slice(0, 8)}…${hash.slice(-6)}`;
@@ -65,10 +67,15 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
   const onChain      = isOnChainMarket(market.id);
   const price        = side === 'YES' ? market.yesPrice : market.noPrice;
   const parsedAmount = parseFloat(amount) || 0;
-  const shares       = parsedAmount > 0 ? parsedAmount / price : 0;
-  const potentialPayout  = shares;
-  const potentialProfit  = potentialPayout - parsedAmount;
-  const isValid      = parsedAmount > 0;
+  const marketFullyPriced = market.yesPrice >= EFFECTIVE_CLOSE_PRICE || market.noPrice >= EFFECTIVE_CLOSE_PRICE;
+  const isEffectivelyClosed = onChain && (market.status !== 'active' || marketFullyPriced);
+  const shares       = parsedAmount > 0 && price > 0 ? parsedAmount / price : 0;
+  const grossPayout  = shares;
+  const grossProfit  = grossPayout - parsedAmount;
+  const protocolFee  = onChain ? Math.max(grossProfit, 0) * PROTOCOL_FEE_RATE : 0;
+  const netPayout    = grossPayout - protocolFee;
+  const netProfit    = netPayout - parsedAmount;
+  const isValid      = parsedAmount > 0 && !isEffectivelyClosed && Number.isFinite(shares);
 
   useEffect(() => {
     setMounted(true);
@@ -219,6 +226,10 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isEffectivelyClosed) {
+      setTxState({ phase: 'error', message: 'Market is effectively closed — no meaningful upside remains.' });
+      return;
+    }
     if (!isValid) return;
     if (!user.loggedIn) { login(); return; }
     if (!onChain) { setTxState({ phase: 'success', hash: '0xmock' }); return; }
@@ -417,21 +428,27 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                       </span>
                     </div>
                     <div className="border-t border-white/5 pt-3 flex justify-between text-sm">
-                      <span className="text-slate-500">Est. payout</span>
+                      <span className="text-slate-500">Est. gross payout</span>
                       <span className="font-mono font-semibold text-white">
-                        {isValid ? `${currency}${potentialPayout.toFixed(2)}` : '—'}
+                        {parsedAmount > 0 ? `${currency}${grossPayout.toFixed(2)}` : '—'}
                       </span>
                     </div>
                     <div className="flex justify-between text-sm">
-                      <span className="text-slate-500">Est. profit</span>
+                      <span className="text-slate-500">Est. protocol fee</span>
+                      <span className="font-mono font-semibold text-slate-300">
+                        {parsedAmount > 0 ? `${currency}${protocolFee.toFixed(2)}` : '—'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-slate-500">Est. net profit</span>
                       <span
                         className={cn(
                           'font-mono font-semibold',
-                          potentialProfit >= 0 ? 'text-emerald-500' : 'text-rose-500'
+                          netProfit >= 0 ? 'text-emerald-500' : 'text-rose-500'
                         )}
                       >
-                        {isValid
-                          ? `${potentialProfit >= 0 ? '+' : ''}${currency}${potentialProfit.toFixed(2)}`
+                        {parsedAmount > 0
+                          ? `${netProfit >= 0 ? '+' : ''}${currency}${netProfit.toFixed(2)}`
                           : '—'}
                       </span>
                     </div>
@@ -448,6 +465,15 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                     <div className="flex items-start gap-2 rounded-lg bg-rose-500/10 border border-rose-500/20 p-3">
                       <AlertCircle className="h-4 w-4 text-rose-400 mt-0.5 shrink-0" />
                       <p className="text-xs text-rose-300 leading-relaxed">{txState.message}</p>
+                    </div>
+                  )}
+
+                  {isEffectivelyClosed && (
+                    <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 p-3">
+                      <AlertCircle className="h-4 w-4 text-amber-400 mt-0.5 shrink-0" />
+                      <p className="text-xs text-amber-200 leading-relaxed">
+                        This market is effectively closed (resolved or fully priced at 0/100c). New orders are disabled.
+                      </p>
                     </div>
                   )}
 

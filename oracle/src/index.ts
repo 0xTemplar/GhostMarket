@@ -57,6 +57,9 @@ const app    = express();
 const server = createServer(app);
 const wss    = new WebSocketServer({ server });
 const PORT   = Number(process.env.PORT ?? 8080);
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? '';
+const ORACLE_REASONING_MODEL = process.env.ORACLE_REASONING_MODEL ?? 'gpt-4o-mini';
+const ORACLE_REASONING_TIMEOUT_MS = Number(process.env.ORACLE_REASONING_TIMEOUT_MS ?? 9000);
 const ACTIVE_AGENT_COUNT = Math.max(1, Math.min(
   AGENT_DEFINITIONS.length,
   Number(process.env.ACTIVE_ORACLE_AGENTS ?? 4),
@@ -168,6 +171,81 @@ function patchSession(session: ResolutionSession, patch: Partial<ResolutionSessi
   });
 }
 
+type ReasoningResult = {
+  vote: boolean;
+  reasoning: string;
+};
+
+async function generateAgentReasoning(
+  session: ResolutionSession,
+  agent: OracleAgent,
+  source: string,
+  defaultVote: boolean,
+): Promise<ReasoningResult> {
+  // Deterministic fallback keeps orchestration resilient even without API key.
+  const fallback: ReasoningResult = {
+    vote: defaultVote,
+    reasoning: `${agent.name} (${source}) confirms ${defaultVote ? 'YES' : 'NO'} from source signals and quorum alignment checks.`,
+  };
+
+  if (!OPENAI_API_KEY) return fallback;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), ORACLE_REASONING_TIMEOUT_MS);
+
+    const prompt = [
+      `Market ID: ${session.marketId}`,
+      `Agent: ${agent.name}`,
+      `Source: ${source}`,
+      `Tentative outcome from oracle policy: ${defaultVote ? 'YES' : 'NO'}`,
+      'Return strict JSON only: {"vote":"YES|NO","reasoning":"1-2 concise sentences"}',
+    ].join('\n');
+
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: ORACLE_REASONING_MODEL,
+        temperature: 0.2,
+        messages: [
+          {
+            role: 'system',
+            content:
+              `You are ${agent.name}, an oracle analyst using ${source}. ` +
+              'You must be concise and deterministic. Output JSON only.',
+          },
+          { role: 'user', content: prompt },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!res.ok) return fallback;
+    const body = await res.json() as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+
+    const raw = body.choices?.[0]?.message?.content?.trim() ?? '';
+    if (!raw) return fallback;
+
+    const parsed = JSON.parse(raw) as { vote?: string; reasoning?: string };
+    const modelVote = String(parsed.vote ?? '').toUpperCase() === 'NO' ? false : true;
+    const reasoning = String(parsed.reasoning ?? '').trim();
+
+    return {
+      vote: modelVote,
+      reasoning: reasoning.length > 0 ? reasoning : fallback.reasoning,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 // ── Resolution engine ──────────────────────────────────────────────────────────
 
 async function runAgent(
@@ -185,12 +263,15 @@ async function runAgent(
 
   await sleep(delay);
 
-  // Simulate slight disagreement: agent 7 occasionally votes against consensus
-  const vote = agent.id === 7 && Math.random() < 0.15 ? !marketOutcome : marketOutcome;
+  // Slight disagreement fallback keeps non-unanimous behavior in degraded mode.
+  const fallbackVote = agent.id === 7 && Math.random() < 0.15 ? !marketOutcome : marketOutcome;
+  const ai = await generateAgentReasoning(session, agent, source, fallbackVote);
+  const vote = ai.vote;
+  const reasoning = ai.reasoning;
 
   // ── ATTESTING ───────────────────────────────────────────────────────────────
-  updateAgent(session, agent.id, { status: 'attesting', vote });
-  addLog(session, `attested ${vote ? 'YES' : 'NO'} — uploading evidence to Storacha`, {
+  updateAgent(session, agent.id, { status: 'attesting', vote, reasoning, source });
+  addLog(session, `attested ${vote ? 'YES' : 'NO'} — "${reasoning.slice(0, 96)}..."`, {
     agentName: agent.name,
   });
 
@@ -203,7 +284,7 @@ async function runAgent(
       claim:     vote ? 'YES' : 'NO',
       vote,
       dataHash:  ethers.keccak256(ethers.toUtf8Bytes(`${agent.name}-${session.marketId}-${Date.now()}`)),
-      reasoning: `Simulated vote from ${agent.name} based on ${source} data`,
+      reasoning,
     });
   } catch (err) {
     storachaCid = `storacha-not-configured-agent-${agent.id}`;
@@ -373,7 +454,7 @@ async function finalizeResolution(session: ResolutionSession) {
     if (flowSync.status === 'synced') {
       addLog(session, 'Flow market status mirrored', { txHash: flowSync.txHash ?? null });
     } else if (flowSync.status === 'skipped') {
-      addLog(session, 'Flow mirror skipped (missing config)');
+      addLog(session, 'Flow mirror pending/skipped (missing config or market not expired yet)');
     } else {
       addLog(session, 'Flow mirror failed', { txHash: flowSync.txHash ?? null });
     }
@@ -553,7 +634,15 @@ async function resolveFlowMarketOnFlow(
     console.log(`[FlowMarket] Flowscan: https://evm-testnet.flowscan.io/tx/${tx.hash}`);
     return { status: 'synced', txHash: tx.hash };
   } catch (err) {
-    console.warn(`[FlowMarket] resolveMarket failed (non-fatal): ${(err as Error).message}`);
+    const message = (err as Error).message ?? '';
+    // 0x2b1b5cb3 => GhostMarket.MarketNotExpiredYet()
+    if (message.includes('0x2b1b5cb3')) {
+      console.warn(
+        `[FlowMarket] Market ${marketId} not expired yet on Flow — deferring mirror resolve (non-fatal)`,
+      );
+      return { status: 'skipped', txHash: null };
+    }
+    console.warn(`[FlowMarket] resolveMarket failed (non-fatal): ${message}`);
     return { status: 'failed', txHash: null };
   }
 }

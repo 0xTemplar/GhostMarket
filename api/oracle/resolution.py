@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine
@@ -130,6 +131,7 @@ class ResolutionSession:
             "outcome":         self.outcome,
             "finalEvidenceCid": self.final_evidence_cid,
             "calibrationTx":  self.calibration_tx,
+            "flowTx":         self.flow_tx,
             "startedAt":       self.started_at,
             "finalizedAt":     self.finalized_at,
             "agents": [{
@@ -149,7 +151,9 @@ class ResolutionSession:
 
 # ── Oracle service proxy (calls TypeScript oracle/ service) ───────────────────
 
-ORACLE_SERVICE_URL = "http://localhost:8080"
+ORACLE_SERVICE_URL = os.getenv("ORACLE_SERVICE_URL", "http://localhost:8092")
+ORACLE_SERVICE_TIMEOUT_SECONDS = float(os.getenv("ORACLE_SERVICE_TIMEOUT_SECONDS", "12"))
+ORACLE_SERVICE_RETRIES = int(os.getenv("ORACLE_SERVICE_RETRIES", "1"))
 
 async def _call_oracle_service(path: str, payload: dict | None = None) -> dict | None:
     """
@@ -157,17 +161,115 @@ async def _call_oracle_service(path: str, payload: dict | None = None) -> dict |
     (Synapse uploads, OracleAgentRegistry, Storacha, ERC-8004).
     Returns None gracefully if the service is not running.
     """
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            if payload is not None:
-                r = await client.post(f"{ORACLE_SERVICE_URL}{path}", json=payload)
-            else:
-                r = await client.get(f"{ORACLE_SERVICE_URL}{path}")
-            if r.status_code == 200:
-                return r.json()
-    except Exception as e:
-        print(f"[OracleService] {path} failed: {e}")
+    retries = max(1, ORACLE_SERVICE_RETRIES)
+    backoff_seconds = [0.5, 1.0, 2.0]
+    last_error: Exception | None = None
+
+    for attempt in range(retries):
+        try:
+            async with httpx.AsyncClient(timeout=ORACLE_SERVICE_TIMEOUT_SECONDS) as client:
+                if payload is not None:
+                    r = await client.post(f"{ORACLE_SERVICE_URL}{path}", json=payload)
+                else:
+                    r = await client.get(f"{ORACLE_SERVICE_URL}{path}")
+
+                if r.status_code == 200:
+                    return r.json()
+
+                body_preview = ""
+                try:
+                    body_preview = r.text[:300]
+                except Exception:
+                    body_preview = "<unreadable body>"
+                print(
+                    f"[OracleService] {path} non-200 status={r.status_code} "
+                    f"attempt={attempt + 1}/{retries} body={body_preview}"
+                )
+        except Exception as e:
+            last_error = e
+            print(f"[OracleService] {path} exception attempt={attempt + 1}/{retries}: {repr(e)}")
+
+        if attempt < retries - 1:
+            await asyncio.sleep(backoff_seconds[min(attempt, len(backoff_seconds) - 1)])
+
+    if last_error:
+        print(f"[OracleService] {path} failed after retries: {repr(last_error)}")
     return None
+
+
+async def _start_ts_oracle_resolution(
+    market_id: int,
+    outcome: bool,
+) -> tuple[bool, str]:
+    """
+    Start (or reuse) the TypeScript oracle session so settlement endpoints are usable.
+    Returns (ok, message).
+    """
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                f"{ORACLE_SERVICE_URL}/oracle/resolve/{market_id}",
+                json={"outcome": outcome},
+            )
+            if r.status_code == 200:
+                return True, "started TypeScript settlement relay session"
+            if r.status_code == 409:
+                return True, "TypeScript settlement relay session already in progress"
+            preview = r.text[:300]
+            return False, f"relay start failed (status={r.status_code}): {preview}"
+    except Exception as e:
+        return False, f"relay start exception: {repr(e)}"
+
+
+async def _handoff_phase6_settlement(session: ResolutionSession):
+    """
+    Handoff from AI quorum finalization to the TS oracle settlement relay (Phase 6).
+    This keeps Oracle Room logs moving and ensures /oracle/settle can be used.
+    """
+    if session.outcome is None:
+        await session._emit_log("Phase 6 handoff skipped — missing finalized outcome")
+        return
+
+    await session._emit_log("starting Phase 6 handoff to Flow settlement relay...")
+    started, message = await _start_ts_oracle_resolution(session.market_id, session.outcome)
+    await session._emit_log(message)
+    if not started:
+        return
+
+    # Poll TS oracle status until finalized (or timeout), then expose readiness.
+    max_polls = 45  # ~90 seconds
+    for _ in range(max_polls):
+        await asyncio.sleep(2)
+        ts_status = await _call_oracle_service(f"/oracle/status/{session.market_id}")
+        if not ts_status:
+            continue
+
+        phase = str(ts_status.get("phase", "unknown"))
+        if phase == "finalized":
+            flow_tx = ts_status.get("flowTxHash") or ts_status.get("flowTx")
+            if isinstance(flow_tx, str) and flow_tx:
+                session.flow_tx = flow_tx
+                await session._emit_log(
+                    "settlement delivered to Flow EVM",
+                    tx_hash=flow_tx,
+                )
+                await session._broadcast({
+                    "type": "settlement_delivered",
+                    "marketId": session.market_id,
+                    "payload": {"txHash": flow_tx},
+                })
+            await session._emit_log(
+                "settlement relay active — users can claim via /oracle/settle/:marketId"
+            )
+            return
+
+        if phase == "failed":
+            await session._emit_log("Phase 6 handoff failed — TS oracle resolution ended in failed phase")
+            return
+
+    await session._emit_log(
+        "Phase 6 handoff timed out waiting for TS oracle finalization; retry /api/oracle/resolve later"
+    )
 
 
 # ── Storacha peer-read helpers ────────────────────────────────────────────────
@@ -259,6 +361,36 @@ async def _run_agent_task(session: ResolutionSession, agent_state: AgentState):
     await _emit_agent_and_log(session, agent_state,
         f'attested {"YES" if attestation.vote else "NO"} — "{attestation.reasoning[:80]}..."')
 
+    # ── SUBMITTED ───────────────────────────────────────────────────────────────
+    # Mark as submitted immediately so slow external writes do not block quorum.
+    agent_state.status     = "submitted"
+    agent_state.attested_at = int(time.time() * 1000)
+    await _emit_agent_and_log(session, agent_state, "attestation submitted")
+
+    # Update vote counts and check quorum
+    session.yes_votes = sum(1 for a in session.agents if a.vote is True)
+    session.no_votes  = sum(1 for a in session.agents if a.vote is False)
+
+    if session.phase == "collecting" and (session.yes_votes >= 5 or session.no_votes >= 5):
+        await _finalize(session)
+
+    # Persist evidence and registry attestation in background (non-gating).
+    asyncio.create_task(_persist_attestation_artifacts(session, agent_state, attestation))
+
+
+async def _emit_agent_and_log(session: ResolutionSession, agent: AgentState, message: str):
+    await session._emit_agent(agent)
+    await session._emit_log(message, agent=agent.name)
+
+
+async def _persist_attestation_artifacts(
+    session: ResolutionSession,
+    agent_state: AgentState,
+    attestation: Attestation,
+):
+    """
+    Persist Storacha/registry artifacts without blocking quorum progression.
+    """
     # Write intermediate evidence to Storacha (via TypeScript oracle service)
     storacha_result = await _call_oracle_service("/oracle/storacha/upload", {
         "agentId":   agent_state.id,
@@ -275,6 +407,7 @@ async def _run_agent_task(session: ResolutionSession, agent_state: AgentState):
 
     if storacha_result and storacha_result.get("cid"):
         agent_state.storacha_cid = storacha_result["cid"]
+        await session._emit_agent(agent_state)
         await session._emit_log(
             f"evidence → Storacha CID: {agent_state.storacha_cid[:24]}...",
             agent=agent_state.name,
@@ -295,23 +428,6 @@ async def _run_agent_task(session: ResolutionSession, agent_state: AgentState):
             agent=agent_state.name,
             tx_hash=attest_result["txHash"],
         )
-
-    # ── SUBMITTED ───────────────────────────────────────────────────────────────
-    agent_state.status     = "submitted"
-    agent_state.attested_at = int(time.time() * 1000)
-    await _emit_agent_and_log(session, agent_state, "attestation submitted")
-
-    # Update vote counts and check quorum
-    session.yes_votes = sum(1 for a in session.agents if a.vote is True)
-    session.no_votes  = sum(1 for a in session.agents if a.vote is False)
-
-    if session.phase == "collecting" and (session.yes_votes >= 5 or session.no_votes >= 5):
-        await _finalize(session)
-
-
-async def _emit_agent_and_log(session: ResolutionSession, agent: AgentState, message: str):
-    await session._emit_agent(agent)
-    await session._emit_log(message, agent=agent.name)
 
 
 # ── Finalization ───────────────────────────────────────────────────────────────
@@ -393,7 +509,7 @@ async def _finalize(session: ResolutionSession):
     session.phase       = "finalized"
     session.finalized_at = int(time.time() * 1000)
     await session._emit_log(
-        "market FINALIZED — settlement delivery to Flow pending (Phase 6)"
+        "market FINALIZED — AI quorum sealed, handing off to Flow settlement relay"
     )
     await session._broadcast({
         "type":     "finalized",
@@ -402,8 +518,12 @@ async def _finalize(session: ResolutionSession):
             "outcome":         session.outcome,
             "finalEvidenceCid": session.final_evidence_cid,
             "calibrationTx":   session.calibration_tx,
+            "flowTxHash":      session.flow_tx,
         },
     })
+
+    # Continue in background: wire finalized AI result into TS settlement relay.
+    asyncio.create_task(_handoff_phase6_settlement(session))
 
 
 # ── Public entry point ─────────────────────────────────────────────────────────

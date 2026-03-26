@@ -15,7 +15,7 @@ import {
 } from '@/lib/oracle-client';
 import { cn } from '@/lib/utils';
 
-const ORACLE_HTTP_BASE = process.env.NEXT_PUBLIC_ORACLE_URL ?? 'http://localhost:8080';
+const ORACLE_HTTP_BASE = process.env.NEXT_PUBLIC_ORACLE_URL ?? 'http://localhost:8092';
 const CALIBRATION_EXPLORER_TX_BASE =
   process.env.NEXT_PUBLIC_CALIBRATION_EXPLORER_TX_BASE ?? 'https://calibration.filscan.io/tx/';
 
@@ -39,6 +39,68 @@ function shorten(value: string, start = 10, end = 8): string {
 function wsUrlForMarket(marketId: string): string {
   const base = ORACLE_HTTP_BASE.replace(/^http/i, 'ws');
   return `${base}/oracle/ws/${marketId}`;
+}
+
+function normalizeSessionPayload(payload: Record<string, unknown>): OracleSession {
+  return {
+    marketId: String(payload.marketId ?? ''),
+    phase: String(payload.phase ?? 'pending') as OracleSession['phase'],
+    agents: (Array.isArray(payload.agents) ? payload.agents : []).map((a) => {
+      const agent = a as Record<string, unknown>;
+      return {
+        id: Number(agent.id ?? 0),
+        name: String(agent.name ?? ''),
+        walletAddress: String(agent.walletAddress ?? ''),
+        reputationScore: Number(agent.reputationScore ?? agent.reputation ?? 80),
+        erc8004Id: agent.erc8004Id ? String(agent.erc8004Id) : null,
+        status: String(agent.status ?? 'idle') as OracleAgentView['status'],
+        vote: typeof agent.vote === 'boolean' ? agent.vote : null,
+        storachaCid: agent.storachaCid ? String(agent.storachaCid) : null,
+        filecoinCid: agent.filecoinCid ? String(agent.filecoinCid) : null,
+        attestedAt: agent.attestedAt ? Number(agent.attestedAt) : null,
+        reasoning: agent.reasoning ? String(agent.reasoning) : undefined,
+        source: agent.source ? String(agent.source) : undefined,
+      };
+    }),
+    yesVotes: Number(payload.yesVotes ?? 0),
+    noVotes: Number(payload.noVotes ?? 0),
+    outcome: typeof payload.outcome === 'boolean' ? payload.outcome : null,
+    finalEvidenceCid: payload.finalEvidenceCid ? String(payload.finalEvidenceCid) : null,
+    calibrationTxHash: payload.calibrationTxHash
+      ? String(payload.calibrationTxHash)
+      : payload.calibrationTx
+      ? String(payload.calibrationTx)
+      : null,
+    flowTxHash: payload.flowTxHash
+      ? String(payload.flowTxHash)
+      : payload.flowTx
+      ? String(payload.flowTx)
+      : null,
+    sepoliaResolutionSync: (payload.sepoliaResolutionSync as OracleSession['sepoliaResolutionSync']) ?? {
+      status: 'idle',
+      txHash: null,
+    },
+    flowResolutionSync: (payload.flowResolutionSync as OracleSession['flowResolutionSync']) ?? {
+      status: 'idle',
+      txHash: null,
+    },
+    startedAt: Number(payload.startedAt ?? Date.now()),
+    finalizedAt: payload.finalizedAt ? Number(payload.finalizedAt) : null,
+    log: (Array.isArray(payload.log) ? payload.log : []).map((l) => {
+      const entry = l as Record<string, unknown>;
+      return {
+        ts: Number(entry.ts ?? Date.now()),
+        agentName: entry.agentName
+          ? String(entry.agentName)
+          : entry.agent
+          ? String(entry.agent)
+          : null,
+        message: String(entry.message ?? ''),
+        txHash: entry.txHash ? String(entry.txHash) : null,
+        cid: entry.cid ? String(entry.cid) : null,
+      };
+    }),
+  };
 }
 
 function quorumThreshold(agentCount: number): number {
@@ -211,6 +273,12 @@ function AgentCard({ agent }: { agent: OracleAgentView }) {
           <span className="font-mono text-[10px] text-slate-400">{shorten(agent.storachaCid, 14, 10)}</span>
         </div>
       )}
+      {agent.reasoning && (
+        <div className="relative mt-2 rounded-md border border-white/5 bg-slate-950/70 px-2.5 py-1.5">
+          <span className="font-mono text-[9px] text-slate-600 uppercase tracking-wider">reasoning </span>
+          <span className="line-clamp-2 text-[10px] text-slate-300">{agent.reasoning}</span>
+        </div>
+      )}
     </motion.div>
   );
 }
@@ -332,25 +400,91 @@ export function OracleRoom() {
     ws.onmessage = (evt) => {
       try {
         const msg = JSON.parse(evt.data) as WsMessage;
-        if (!msg || msg.marketId !== id) return;
-        if (msg.type === 'session_init') { setSession(msg.payload); return; }
+        if (!msg || String(msg.marketId) !== String(id)) return;
+        if (msg.type === 'session_init') {
+          const payload = msg.payload as unknown as Record<string, unknown>;
+          setSession(normalizeSessionPayload(payload));
+          return;
+        }
         setSession((prev) => {
           if (!prev) return prev;
           switch (msg.type) {
             case 'agent_update': {
-              const agents = prev.agents.map((a) => a.id === msg.payload.id ? { ...a, ...msg.payload } : a);
+              const patch = msg.payload as unknown as Record<string, unknown>;
+              const normalizedPatch: Partial<OracleAgentView> = {
+                id: Number(patch.id ?? 0),
+                name: String(patch.name ?? ''),
+                status: String(patch.status ?? 'idle') as OracleAgentView['status'],
+                vote: typeof patch.vote === 'boolean' ? patch.vote : null,
+                storachaCid: patch.storachaCid ? String(patch.storachaCid) : null,
+                filecoinCid: patch.filecoinCid ? String(patch.filecoinCid) : null,
+                attestedAt: patch.attestedAt ? Number(patch.attestedAt) : null,
+                reputationScore: Number(patch.reputationScore ?? patch.reputation ?? 80),
+                reasoning: patch.reasoning ? String(patch.reasoning) : undefined,
+                source: patch.source ? String(patch.source) : undefined,
+              };
+              const agents = prev.agents.map((a) => a.id === normalizedPatch.id ? { ...a, ...normalizedPatch } : a);
               return { ...prev, agents };
             }
             case 'session_patch':
               return { ...prev, ...msg.payload };
             case 'log':
-              return { ...prev, log: [...prev.log, msg.payload] };
+              {
+                const logPayload = msg.payload as unknown as Record<string, unknown>;
+              return {
+                ...prev,
+                log: [
+                  ...prev.log,
+                  {
+                    ts: Number(logPayload.ts ?? Date.now()),
+                    agentName: logPayload.agentName
+                      ? String(logPayload.agentName)
+                      : logPayload.agent
+                      ? String(logPayload.agent)
+                      : null,
+                    message: String(logPayload.message ?? ''),
+                    txHash: logPayload.txHash
+                      ? String(logPayload.txHash)
+                      : null,
+                    cid: logPayload.cid
+                      ? String(logPayload.cid)
+                      : null,
+                  } satisfies OracleLogEntry,
+                ],
+              };
+            }
             case 'quorum_reached':
-              return { ...prev, phase: 'quorum_reached', yesVotes: msg.payload.yesVotes, noVotes: msg.payload.noVotes, outcome: msg.payload.outcome };
+              {
+                const quorumPayload = msg.payload as unknown as { yesVotes?: number; noVotes?: number; outcome?: boolean };
+                return {
+                  ...prev,
+                  phase: 'quorum_reached',
+                  yesVotes: Number(quorumPayload.yesVotes ?? prev.yesVotes),
+                  noVotes: Number(quorumPayload.noVotes ?? prev.noVotes),
+                  outcome: typeof quorumPayload.outcome === 'boolean' ? quorumPayload.outcome : prev.outcome,
+                };
+              }
             case 'finalized':
-              return { ...prev, phase: 'finalized', outcome: msg.payload.outcome, finalEvidenceCid: msg.payload.finalEvidenceCid, calibrationTxHash: msg.payload.calibrationTxHash };
+              {
+                const finalPayload = msg.payload as unknown as {
+                  outcome?: boolean;
+                  finalEvidenceCid?: string | null;
+                  calibrationTxHash?: string | null;
+                  calibrationTx?: string | null;
+                };
+              return {
+                ...prev,
+                phase: 'finalized',
+                outcome: typeof finalPayload.outcome === 'boolean' ? finalPayload.outcome : prev.outcome,
+                finalEvidenceCid: finalPayload.finalEvidenceCid ?? prev.finalEvidenceCid,
+                calibrationTxHash: finalPayload.calibrationTxHash ?? finalPayload.calibrationTx ?? prev.calibrationTxHash,
+              };
+            }
             case 'settlement_delivered':
-              return { ...prev, flowTxHash: msg.payload.txHash ?? prev.flowTxHash };
+              {
+                const settlementPayload = msg.payload as unknown as { txHash?: string | null };
+                return { ...prev, flowTxHash: settlementPayload.txHash ?? prev.flowTxHash };
+              }
             default:
               return prev;
           }
@@ -378,7 +512,6 @@ export function OracleRoom() {
     setResolving(true);
     setError(null);
     try {
-      // Outcome is determined by agent votes/quorum; the trigger only starts the run.
       await triggerOracleResolution(marketId, true);
       connectWs(marketId);
       const latest = await getOracleSession(marketId);

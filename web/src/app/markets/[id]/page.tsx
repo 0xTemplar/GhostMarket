@@ -61,6 +61,7 @@ function OnChainActions({
     | { phase: 'success'; hash: string }
     | { phase: 'error'; msg: string }
   >({ phase: 'idle' });
+  const legacyPublicEnabled = !isEammDeployed();
 
   const loadPosition = useCallback(async () => {
     if (!user.evmAddress) return;
@@ -70,8 +71,8 @@ function OnChainActions({
       const zero = '0x' + '0'.repeat(64);
 
       const [pos, eligible, handles, locked] = await Promise.all([
-        readUserPosition(raw.id, addr),
-        readIsRefundEligible(raw.id),
+        legacyPublicEnabled ? readUserPosition(raw.id, addr) : Promise.resolve(null),
+        legacyPublicEnabled ? readIsRefundEligible(raw.id) : Promise.resolve(false),
         isEammDeployed()
           ? readEammPositionHandles(raw.id, addr).catch(() => null)
           : Promise.resolve(null),
@@ -80,7 +81,7 @@ function OnChainActions({
           : Promise.resolve('0'),
       ]);
 
-      if (pos) {
+      if (pos && legacyPublicEnabled) {
         setUserPos({
           yes: pos.yesAmount > 0n
             ? `YES: ${(Number(pos.yesAmount) / 1e18).toFixed(4)} FLOW`
@@ -101,11 +102,11 @@ function OnChainActions({
         }
       }
 
-      setRefundEligible(eligible);
+      setRefundEligible(legacyPublicEnabled ? eligible : false);
     } finally {
       setPosLoading(false);
     }
-  }, [user.evmAddress, raw.id]);
+  }, [user.evmAddress, raw.id, legacyPublicEnabled]);
 
   useEffect(() => { loadPosition(); }, [loadPosition]);
 
@@ -136,6 +137,7 @@ function OnChainActions({
   if (!user.loggedIn) return null;
 
   const canClaim =
+    legacyPublicEnabled &&
     !userPos?.claimed &&
     (raw.status === 1 || refundEligible) &&
     (userPos?.yes || userPos?.no);
@@ -152,7 +154,7 @@ function OnChainActions({
       ) : userPos?.yes || userPos?.no || shieldedPos ? (
         <div className="space-y-3">
           {/* Public on-chain position */}
-          {(userPos?.yes || userPos?.no) && (
+          {legacyPublicEnabled && (userPos?.yes || userPos?.no) && (
             <div className="space-y-2">
               {userPos!.yes && (
                 <div className="flex items-center gap-2 text-sm">
@@ -256,6 +258,7 @@ export default function MarketDetailPage() {
 
   const [market,    setMarket]    = useState<Market | null>(null);
   const [rawMarket, setRawMarket] = useState<OnChainMarket | null>(null);
+  const [eammMeta, setEammMeta]   = useState<{ status: number; outcome: boolean; expiryAt: number } | null>(null);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState<string | null>(null);
 
@@ -269,12 +272,16 @@ export default function MarketDetailPage() {
       if (isNumericId(id)) {
         // On-chain market — read from contract
         try {
-          const raw = await readMarket(Number(id));
+          const [raw, meta] = await Promise.all([
+            readMarket(Number(id)),
+            isEammDeployed() ? readEammMarketMeta(Number(id)).catch(() => null) : Promise.resolve(null),
+          ]);
           if (cancelled) return;
           if (!raw) {
             setError('Market not found on-chain.');
           } else {
             setRawMarket(raw);
+            setEammMeta(meta);
             setMarket(toFrontendMarket(raw));
           }
         } catch {
@@ -321,11 +328,13 @@ export default function MarketDetailPage() {
 
   const yesPct  = Math.round(market.yesPrice * 100);
   const noPct   = 100 - yesPct;
+  const marketFullyPriced = market.yesPrice >= 0.999 || market.noPrice >= 0.999;
+  const sepoliaClosed = eammMeta ? eammMeta.status !== 0 : false;
   const isPositiveChange = market.change24h >= 0;
   const statusMap: Record<string, string> = {
     active: 'Active', resolved: 'Resolved', disputed: 'Disputed', pending: 'Pending',
   };
-  const canBet = market.status === 'active';
+  const canBet = market.status === 'active' && !marketFullyPriced && !sepoliaClosed;
 
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
@@ -507,7 +516,7 @@ export default function MarketDetailPage() {
 
                 <div className="w-full h-2 rounded-full bg-rose-500/15 mb-5 overflow-hidden">
                   <div
-                    className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-500/80 transition-all duration-500"
+                    className="h-full rounded-full bg-linear-to-r from-emerald-500 to-emerald-500/80 transition-all duration-500"
                     style={{ width: `${yesPct}%` }}
                   />
                 </div>
@@ -534,6 +543,10 @@ export default function MarketDetailPage() {
                     <p className="text-sm text-slate-400">
                       {market.status === 'resolved'
                         ? `Market resolved — ${rawMarket?.outcome ? 'YES' : 'NO'} won.`
+                        : sepoliaClosed
+                        ? 'This market is already closed on Sepolia and no longer accepts orders.'
+                        : marketFullyPriced
+                        ? 'This market is fully priced at 0/100c, so no meaningful upside remains.'
                         : 'This market is no longer accepting orders.'}
                     </p>
                   </div>

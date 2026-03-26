@@ -28,6 +28,8 @@ import Redis from 'ioredis';
 const GHOST_VAULT_ADDRESS  = process.env.GHOST_VAULT_ADDRESS ?? '0xAf470490b2462DC7359605B8e5D731CbB7816B55';
 const FLOW_RPC_URL         = process.env.FLOW_RPC_URL ?? 'https://testnet.evm.nodes.onflow.org';
 const SETTLEMENT_SIGNER_KEY = process.env.SETTLEMENT_SIGNER_PRIVATE_KEY ?? '';
+const ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY =
+  (process.env.ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY ?? 'false').toLowerCase() === 'true';
 const ORACLE_REDIS_URL      = process.env.ORACLE_REDIS_URL ?? process.env.REDIS_URL ?? '';
 const VAULT_SIGNER_ABI       = ['function settlementSigner() view returns (address)'];
 
@@ -248,6 +250,11 @@ export function getCachedSettlement(marketId: string, userAddress: string): Pend
 export async function deliverSettlementOnChain(
   settlement: PendingSettlement,
 ): Promise<string | null> {
+  if (!ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY) {
+    console.log('[Settlement] Autonomous delivery disabled (ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY=false)');
+    return null;
+  }
+
   if (!SETTLEMENT_SIGNER_KEY) {
     console.log('[Settlement] Autonomous delivery skipped (no SETTLEMENT_SIGNER_PRIVATE_KEY)');
     return null;
@@ -299,7 +306,16 @@ export async function deliverSettlementOnChain(
 
     return tx.hash as string;
   } catch (err) {
-    console.error('[Settlement] On-chain delivery failed:', (err as Error).message);
+    const message = (err as Error).message ?? '';
+    // 0x8baa579f => InvalidSignature() on GhostVault; expected when relayer != user.
+    if (message.includes('0x8baa579f')) {
+      console.warn(
+        '[Settlement] Autonomous claim rejected with InvalidSignature (relayer is not the claiming user). ' +
+        'Use user-initiated claim flow instead.',
+      );
+      return null;
+    }
+    console.error('[Settlement] On-chain delivery failed:', message);
     return null;
   }
 }
