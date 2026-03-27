@@ -45,3 +45,5 @@ API: [http://localhost:8000](http://localhost:8000). Docs: [http://localhost:800
 - Phase 3: Market lifecycle, resolution, non-private flow
 - Phase 4: FHE / confidential execution (eAMM, fhevmjs)
 - Phase 5+: Oracle resolution, Storacha, Lit settlement, agent controls
+
+https://testnet.flowscan.io/contract/A.59403984ca469d1c.GhostVaultResolverHandler

@@ -12,11 +12,11 @@
 //   outcome        — true = YES won, false = NO won
 //   ghostVaultHex  — GhostVault EVM address, no 0x prefix (40 chars)
 
-import "FlowTransactionScheduler"
-import "FlowTransactionSchedulerUtils"
-import "GhostVaultResolverHandler"
-import "FlowToken"
-import "FungibleToken"
+import FlowTransactionScheduler     from 0x8c5303eaa26202d6
+import FlowTransactionSchedulerUtils from 0x8c5303eaa26202d6
+import GhostVaultResolverHandler     from 0x59403984ca469d1c
+import FlowToken                     from 0x7e60df042a9c0868
+import FungibleToken                 from 0x9a0766d93b6608b7
 
 transaction(
     timestamp:     UFix64,
