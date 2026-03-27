@@ -1333,10 +1333,26 @@ app.post('/oracle/settle/:marketId', async (req, res) => {
 
   const session = sessions.get(marketId);
   if (!session || session.phase !== 'finalized') {
-    return res.status(409).json({
-      error: 'Market not finalized',
-      phase: session?.phase ?? 'unknown',
-    });
+    // The oracle may have restarted and lost in-memory session state.
+    // Fall back to the canonical on-chain source (GhostEAMM on Sepolia).
+    try {
+      const _sepoliaRpc = process.env.SEPOLIA_RPC_URL ?? 'https://rpc.sepolia.org';
+      const _eammAddr   = process.env.GHOST_EAMM_ADDRESS ?? '';
+      const _eamm = new (await import('ethers')).ethers.Contract(
+        _eammAddr,
+        ['function getMarketMeta(uint256 marketId) external view returns (uint8 status, bool outcome, uint64 expiryAt)'],
+        new (await import('ethers')).ethers.JsonRpcProvider(_sepoliaRpc),
+      );
+      const [_status, _outcome] = await _eamm.getMarketMeta(BigInt(marketId));
+      if (Number(_status) !== 1) {
+        return res.status(409).json({ error: 'Market not finalized', phase: session?.phase ?? 'unknown' });
+      }
+      // EAMM confirms market is resolved — restore finalization state for this request.
+      console.log(`[Settlement] Market ${marketId} confirmed resolved on EAMM (recovering from oracle restart)`);
+      markMarketFinalized(marketId, Boolean(_outcome));
+    } catch {
+      return res.status(409).json({ error: 'Market not finalized', phase: session?.phase ?? 'unknown' });
+    }
   }
 
   try {

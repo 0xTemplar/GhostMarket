@@ -162,18 +162,30 @@ async function readOnChainSettlementData(
   const vaultResolved: boolean = await vault.isResolved(input.marketIdBytes32).catch(() => false);
 
   if (!vaultResolved) {
-    // Confirm the EAMM is resolved (so we know the oracle quorum fired correctly).
+    // EAMM is the canonical source — check it to get the outcome.
     const sepoliaProvider = new ethers.JsonRpcProvider(SEPOLIA_RPC_URL);
     const eamm = new ethers.Contract(GHOST_EAMM_ADDRESS, EAMM_ABI, sepoliaProvider);
-    const [status] = await eamm.getMarketMeta(BigInt(input.marketIdUint)).catch(() => [0]);
+    const [status, eammOutcome] = await eamm.getMarketMeta(BigInt(input.marketIdUint)).catch(() => [0, false]);
     if (Number(status) !== 1) {
       throw new Error(`Market ${input.marketIdUint} not resolved on Sepolia EAMM (status: ${status})`);
     }
-    // EAMM is resolved but vault hasn't been updated yet — vault-reporter is still in-flight.
-    throw new Error(
-      `GhostVault outcome not yet reported for market ${input.marketIdUint}. ` +
-      'vault-reporter may still be confirming — retry in a few seconds.',
-    );
+
+    // Auto-trigger vault-reporter so claimPayout can verify payouts on-chain.
+    // This handles: oracle restart (session lost), vault redeploy, or initial race condition.
+    console.log(`[Settlement] GhostVault not yet resolved for market ${input.marketIdUint} — auto-triggering reportOutcome…`);
+    const { reportOutcomeToVault } = await import('./vault-reporter');
+    const syncResult = await reportOutcomeToVault(input.marketIdUint, Boolean(eammOutcome));
+
+    if (syncResult.status === 'failed') {
+      throw new Error(`Failed to sync outcome to GhostVault: ${syncResult.message}`);
+    }
+
+    // Confirm vault is now resolved before continuing
+    const vaultResolvedNow = await vault.isResolved(input.marketIdBytes32).catch(() => false);
+    if (!vaultResolvedNow && syncResult.status !== 'already_set') {
+      throw new Error(`GhostVault outcome still unconfirmed for market ${input.marketIdUint} — retry in a moment`);
+    }
+    console.log(`[Settlement] GhostVault outcome synced (${syncResult.status}) — proceeding with settlement`);
   }
 
   // Delegate payout math to the contract. The vault holds the final pool snapshot

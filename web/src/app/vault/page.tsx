@@ -47,8 +47,10 @@ export default function VaultPage() {
     delta: number;
   } | null>(null);
   const prevFreeBalanceRef = useRef<string | null>(null);
+  // Suppresses the settlement banner for the next balance fetch (set after deposit/withdraw).
+  const suppressBannerRef = useRef(false);
 
-  const fetchBalance = useCallback(async () => {
+  const fetchBalance = useCallback(async (suppressBanner = false) => {
     if (!user.evmAddress) return;
     const addr = user.evmAddress as `0x${string}`;
     const [total, free] = await Promise.all([
@@ -58,22 +60,25 @@ export default function VaultPage() {
     setBalance(total);
     setFreeBalance(free);
 
-    // Settlement notification: detect if free balance increased vs stored value
+    // Settlement notification: detect if free balance increased since last check.
+    // Suppressed when the increase is caused by a deposit the user just made.
     const stored = prevFreeBalanceRef.current ?? localStorage.getItem(BALANCE_STORAGE_KEY);
-    if (stored !== null && free !== null) {
+    if (stored !== null && free !== null && !suppressBanner && !suppressBannerRef.current) {
       const delta = parseFloat(free) - parseFloat(stored);
       if (delta > 0.0001) {
         setSettlementBanner({ delta });
       }
     }
+    suppressBannerRef.current = false;
     prevFreeBalanceRef.current = free;
     if (free) localStorage.setItem(BALANCE_STORAGE_KEY, free);
   }, [user.evmAddress]);
 
-  // Initial load + poll every 30s so settled payouts surface automatically
+  // Initial load + poll every 30s so settled payouts surface automatically.
+  // First load is always suppressed — there's no prior session to compare against.
   useEffect(() => {
-    fetchBalance();
-    const interval = setInterval(fetchBalance, 30_000);
+    fetchBalance(true);
+    const interval = setInterval(() => fetchBalance(), 30_000);
     return () => clearInterval(interval);
   }, [fetchBalance]);
 
@@ -95,6 +100,7 @@ export default function VaultPage() {
       await publicClient.waitForTransactionReceipt({ hash });
       setDepositTx({ status: 'success', hash });
       setDepositAmount('');
+      suppressBannerRef.current = true; // this balance increase is from a deposit, not settlement
       await fetchBalance();
     } catch (e: unknown) {
       setDepositTx({ status: 'error', error: (e as Error).message });
@@ -116,6 +122,7 @@ export default function VaultPage() {
       await publicClient.waitForTransactionReceipt({ hash });
       setWithdrawTx({ status: 'success', hash });
       setWithdrawAmount('');
+      suppressBannerRef.current = true; // suppress banner for withdraw-triggered refetch
       await fetchBalance();
     } catch (e: unknown) {
       setWithdrawTx({ status: 'error', error: (e as Error).message });
@@ -215,7 +222,7 @@ export default function VaultPage() {
             <span className="font-semibold font-mono">
               +{settlementBanner.delta.toFixed(4)} FLOW
             </span>{' '}
-            credited to your vault from market settlement.
+            credited to your vault — likely from a market settlement payout.
           </p>
           <button
             onClick={() => setSettlementBanner(null)}

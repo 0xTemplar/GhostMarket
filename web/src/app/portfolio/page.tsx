@@ -558,7 +558,27 @@ export default function PortfolioPage() {
       // Refresh lists so claimed/closed positions disappear from the open view.
       await Promise.all([fetchShieldedPositions(), fetchOnChainPositions()]);
     } catch (err) {
-      const message = (err as Error).message ?? 'Claim failed';
+      const raw = (err as Error).message ?? 'Claim failed';
+      // Translate common on-chain reverts into actionable messages
+      let message = raw;
+      if (raw.includes('InvalidSignature')) {
+        message =
+          'Settlement signature is outdated — the oracle signed for a previous vault deployment. ' +
+          'The oracle will re-sign automatically. Try again in a moment.';
+      } else if (raw.includes('NonceAlreadyUsed')) {
+        message = 'This settlement was already submitted. Refresh to see your updated vault balance.';
+      } else if (raw.includes('PayoutExpired')) {
+        message = 'Settlement signature expired. Request a fresh one by clicking Claim again.';
+      } else if (raw.includes('PayoutMismatch')) {
+        message =
+          'Payout amount does not match the on-chain formula. ' +
+          'The oracle will recalculate. Try again in a moment.';
+      } else if (raw.includes('User rejected')) {
+        message = 'Transaction rejected.';
+      } else if (raw.length > 200) {
+        // Truncate noisy viem stack traces
+        message = raw.slice(0, 200) + '…';
+      }
       setPhase({ phase: 'error', error: message });
     }
   }, [user.evmAddress, walletClient, fetchShieldedPositions, fetchOnChainPositions]);

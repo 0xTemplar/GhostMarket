@@ -161,20 +161,6 @@ export const GHOST_VAULT_ABI = [
     outputs: [{ name: '', type: 'bool' }],
   },
   {
-    name: 'finalYesPools',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [{ name: 'marketId', type: 'bytes32' }],
-    outputs: [{ name: '', type: 'uint256' }],
-  },
-  {
-    name: 'finalNoPools',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [{ name: 'marketId', type: 'bytes32' }],
-    outputs: [{ name: '', type: 'uint256' }],
-  },
-  {
     name: 'isResolved',
     type: 'function',
     stateMutability: 'view',
@@ -203,10 +189,8 @@ export const GHOST_VAULT_ABI = [
     type: 'function',
     stateMutability: 'nonpayable',
     inputs: [
-      { name: 'marketId',     type: 'bytes32' },
-      { name: 'outcome',      type: 'bool'    },
-      { name: 'finalYesPool', type: 'uint256' },
-      { name: 'finalNoPool',  type: 'uint256' },
+      { name: 'marketId', type: 'bytes32' },
+      { name: 'outcome',  type: 'bool'    },
     ],
     outputs: [],
   },

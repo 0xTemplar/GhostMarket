@@ -23,6 +23,14 @@ const MARKETS = [
     resolutionSource: 'SEC official approval notices',
     daysFromNow: 96,
   },
+  {
+    title: 'Will Ethereum hit $5,000 before September 2026?',
+    description:
+      'Resolves YES if ETH/USD price closes above $5,000 on any major exchange (Coinbase, Binance, or Kraken) before September 1, 2026.',
+    category: 'Crypto',
+    resolutionSource: 'Coinbase, Binance, Kraken spot price feeds',
+    daysFromNow: 158,
+  },
 ];
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));

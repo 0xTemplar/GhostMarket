@@ -44,19 +44,6 @@ contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step, EIP712 {
     /// @notice Bet side per user per market: true = YES, false = NO.
     mapping(address => mapping(bytes32 => bool)) public userSides;
 
-    /**
-     * @notice Final YES-side pool total for a market — set once at reportOutcome.
-     *
-     * This is a post-resolution snapshot, not a live accumulator.
-     * It is NOT updated during the active market, so on-chain pool depth
-     * remains hidden while betting is open. The oracle reads collateral-lock
-     * event history at resolution time and passes the totals in.
-     */
-    mapping(bytes32 => uint256) public finalYesPools;
-
-    /// @notice Final NO-side pool total — companion to finalYesPools.
-    mapping(bytes32 => uint256) public finalNoPools;
-
     /// @notice Whether the oracle has reported an outcome for a market.
     mapping(bytes32 => bool) public isResolved;
 
@@ -76,8 +63,7 @@ contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step, EIP712 {
 
     event Deposited(address indexed user, uint256 amount);
     event Withdrawn(address indexed user, uint256 amount);
-    /// @dev `side` is emitted so the oracle can reconstruct YES/NO pool totals
-    ///      from event history at resolution time, without storing live aggregates.
+    /// @dev `side` is emitted for auditability; not used in on-chain payout math.
     event BetLocked(address indexed user, bytes32 indexed marketId, uint256 amount, bool side);
     event BetUnlocked(address indexed user, bytes32 indexed marketId, uint256 amount);
     event PayoutClaimed(address indexed user, bytes32 indexed marketId, uint256 amount);
@@ -157,9 +143,8 @@ contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step, EIP712 {
         userSides[msg.sender][marketId]     = side;
         totalLocked[msg.sender]            += amount;
 
-        // Note: we intentionally do NOT accumulate pool totals here.
-        // Pool depth stays hidden during the active market (no live on-chain aggregate).
-        // The oracle derives YES/NO totals from BetLocked event history at resolution.
+        // Pool-depth aggregates are never written to this contract.
+        // They remain FHE-encrypted inside GhostEAMM throughout the market lifecycle.
 
         emit BetLocked(msg.sender, marketId, amount, side);
     }
@@ -167,33 +152,21 @@ contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step, EIP712 {
     // ─── Outcome reporting (Option B) ─────────────────────────────────────────
 
     /**
-     * @notice Called by the oracle after quorum to record the market outcome
-     *         and the final pool snapshot.
+     * @notice Called by the oracle after quorum to record the market outcome.
      *
-     * Pool totals are passed in from the oracle (derived from BetLocked event
-     * history or from Zama gateway-decrypt of the EAMM pools). They are stored
-     * here only once, at resolution — never updated during the active market.
-     * This preserves pool-depth confidentiality while betting is open.
+     * Once set, claimPayout validates the signed amount against computeExpectedPayout,
+     * making individual payout manipulation by the oracle impossible.
      *
-     * Once set, claimPayout validates signed amounts against computeExpectedPayout,
-     * so the oracle cannot manipulate individual payouts.
+     * Pool-depth (aggregate YES/NO totals) is never written here — it remains
+     * FHE-encrypted inside GhostEAMM on Sepolia throughout the market lifecycle.
      *
-     * @param marketId      The GhostEAMM market ID (bytes32).
-     * @param outcome       true = YES won, false = NO won.
-     * @param finalYesPool  Total FLOW locked on YES side (sum of BetLocked YES events).
-     * @param finalNoPool   Total FLOW locked on NO side (sum of BetLocked NO events).
+     * @param marketId  The GhostEAMM market ID (bytes32).
+     * @param outcome   true = YES won, false = NO won.
      */
-    function reportOutcome(
-        bytes32 marketId,
-        bool    outcome,
-        uint256 finalYesPool,
-        uint256 finalNoPool
-    ) external onlyOwner {
+    function reportOutcome(bytes32 marketId, bool outcome) external onlyOwner {
         if (isResolved[marketId]) revert MarketAlreadyResolved(marketId);
         isResolved[marketId]       = true;
         resolvedOutcomes[marketId] = outcome;
-        finalYesPools[marketId]    = finalYesPool;
-        finalNoPools[marketId]     = finalNoPool;
         emit MarketResolved(marketId, outcome);
     }
 
@@ -203,28 +176,22 @@ contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step, EIP712 {
      * @notice Compute the exact payout owed to `user` for `marketId`.
      *         Returns 0 if the market is not resolved or the user lost.
      *
-     * Formula (winner): lockedAmount + (lockedAmount × loserPool / winnerPool)
-     * Formula (loser):  0 (lock released, stake forfeited)
+     * Formula:
+     *   winner → lockedAmount  (original stake returned)
+     *   loser  → 0             (stake forfeited)
+     *
+     * Pool-depth aggregates are intentionally omitted here — they remain
+     * FHE-encrypted in GhostEAMM. This keeps the privacy boundary clean:
+     * no aggregate information ever needs to be published on Flow EVM.
      */
     function computeExpectedPayout(
         address user,
         bytes32 marketId
     ) public view returns (uint256) {
         if (!isResolved[marketId]) return 0;
-
-        bool outcome  = resolvedOutcomes[marketId];
-        bool uSide    = userSides[user][marketId];
-        bool won      = (uSide == outcome);
+        bool won = (userSides[user][marketId] == resolvedOutcomes[marketId]);
         if (!won) return 0;
-
-        uint256 locked = lockedAmounts[user][marketId];
-        if (locked == 0) return 0;
-
-        uint256 winnerPool = outcome ? finalYesPools[marketId] : finalNoPools[marketId];
-        uint256 loserPool  = outcome ? finalNoPools[marketId]  : finalYesPools[marketId];
-
-        if (winnerPool == 0) return locked;
-        return locked + (locked * loserPool / winnerPool);
+        return lockedAmounts[user][marketId];
     }
 
     // ─── Withdraw ─────────────────────────────────────────────────────────────
