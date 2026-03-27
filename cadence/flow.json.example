@@ -1,0 +1,43 @@
+{
+  "networks": {
+    "testnet": "access.devnet.nodes.onflow.org:9000"
+  },
+  "contracts": {
+    "FlowTransactionScheduler": {
+      "aliases": { "testnet": "0x8c5303eaa26202d6" }
+    },
+    "FlowTransactionSchedulerUtils": {
+      "aliases": { "testnet": "0x8c5303eaa26202d6" }
+    },
+    "EVM": {
+      "aliases": { "testnet": "0x8c5303eaa26202d6" }
+    },
+    "FlowToken": {
+      "aliases": { "testnet": "0x7e60df042a9c0868" }
+    },
+    "FungibleToken": {
+      "aliases": { "testnet": "0x9a0766d93b6608b7" }
+    },
+    "GhostVaultResolverHandler": {
+      "source": "./contracts/GhostVaultResolverHandler.cdc",
+      "aliases": { "testnet": "<YOUR_FLOW_ACCOUNT_ADDRESS>" }
+    }
+  },
+  "accounts": {
+    "oracle-account": {
+      "address": "<YOUR_FLOW_ACCOUNT_ADDRESS>",
+      "key": {
+        "type": "hex",
+        "index": 0,
+        "signatureAlgorithm": "ECDSA_secp256k1",
+        "hashAlgorithm": "SHA3_256",
+        "privateKey": "<YOUR_FLOW_PRIVATE_KEY>"
+      }
+    }
+  },
+  "deployments": {
+    "testnet": {
+      "oracle-account": ["GhostVaultResolverHandler"]
+    }
+  }
+}

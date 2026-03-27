@@ -19,6 +19,7 @@
     "@lit-protocol/auth": "^8.2.3",
     "@lit-protocol/lit-client": "^8.3.1",
     "@lit-protocol/networks": "^8.4.1",
+    "@onflow/fcl": "^1.21.10",
     "@storacha/client": "^2.1.1",
     "cors": "^2.8.5",
     "dotenv": "^16.0.0",

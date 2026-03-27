@@ -56,6 +56,14 @@ contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step, EIP712 {
      */
     address public settlementSigner;
 
+    /**
+     * @notice Authorised outcome reporter — may call reportOutcome() in addition
+     *         to the owner. Set to the Cadence COA EVM address to allow the
+     *         FlowTransactionScheduler to deliver outcomes autonomously.
+     *         Zero address disables (owner-only mode).
+     */
+    address public outcomeReporter;
+
     /// @notice Replay-protection: tracks consumed (user, marketId, nonce) triples.
     mapping(address => mapping(bytes32 => mapping(uint256 => bool))) public usedNonces;
 
@@ -69,6 +77,7 @@ contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step, EIP712 {
     event PayoutClaimed(address indexed user, bytes32 indexed marketId, uint256 amount);
     event MarketResolved(bytes32 indexed marketId, bool outcome);
     event SettlementSignerUpdated(address indexed previous, address indexed next);
+    event OutcomeReporterUpdated(address indexed previous, address indexed next);
 
     // ─── Errors ───────────────────────────────────────────────────────────────
 
@@ -81,6 +90,7 @@ contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step, EIP712 {
     error ZeroAddress();
     error BetAlreadyLocked(bytes32 marketId);
     error MarketAlreadyResolved(bytes32 marketId);
+    error UnauthorizedReporter();
     error PayoutMismatch(uint256 computed, uint256 claimed);
 
     bytes32 public constant CLAIM_TYPEHASH =
@@ -154,8 +164,9 @@ contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step, EIP712 {
     /**
      * @notice Called by the oracle after quorum to record the market outcome.
      *
-     * Once set, claimPayout validates the signed amount against computeExpectedPayout,
-     * making individual payout manipulation by the oracle impossible.
+     * Callable by the owner OR the designated outcomeReporter (e.g. the Cadence
+     * COA address used by FlowTransactionScheduler for autonomous delivery).
+     * Both paths remain active simultaneously — no ownership transfer required.
      *
      * Pool-depth (aggregate YES/NO totals) is never written here — it remains
      * FHE-encrypted inside GhostEAMM on Sepolia throughout the market lifecycle.
@@ -163,11 +174,23 @@ contract GhostVault is ReentrancyGuard, Pausable, Ownable2Step, EIP712 {
      * @param marketId  The GhostEAMM market ID (bytes32).
      * @param outcome   true = YES won, false = NO won.
      */
-    function reportOutcome(bytes32 marketId, bool outcome) external onlyOwner {
+    function reportOutcome(bytes32 marketId, bool outcome) external {
+        if (msg.sender != owner() && msg.sender != outcomeReporter)
+            revert UnauthorizedReporter();
         if (isResolved[marketId]) revert MarketAlreadyResolved(marketId);
         isResolved[marketId]       = true;
         resolvedOutcomes[marketId] = outcome;
         emit MarketResolved(marketId, outcome);
+    }
+
+    /**
+     * @notice Set the authorised outcome reporter address.
+     *         Set to the Cadence COA EVM address to enable autonomous Cadence
+     *         scheduler delivery. Set to address(0) to revert to owner-only mode.
+     */
+    function setOutcomeReporter(address reporter) external onlyOwner {
+        emit OutcomeReporterUpdated(outcomeReporter, reporter);
+        outcomeReporter = reporter;
     }
 
     // ─── Payout computation ────────────────────────────────────────────────────

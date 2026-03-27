@@ -93,6 +93,10 @@ const ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY =
   (
     process.env.ENABLE_AUTONOMOUS_SETTLEMENT_DELIVERY ?? 'false'
   ).toLowerCase() === 'true';
+const CADENCE_ADAPTER_URL =
+  process.env.CADENCE_ADAPTER_ENABLED === 'true'
+    ? `http://localhost:${process.env.CADENCE_ADAPTER_PORT ?? 8093}`
+    : null;
 const quorumThreshold = (agentCount: number): number =>
   Math.floor(agentCount / 2) + 1;
 
@@ -505,6 +509,27 @@ async function finalizeResolution(session: ResolutionSession) {
   markMarketFinalized(session.marketId, outcome);
 
   addLog(session, 'resolution finalized — oracle outcome sealed');
+
+  // ── Cadence scheduler: commit delivery on-chain at market expiry ────────────
+  // Fire-and-forget POST to the cadence adapter microservice. If the adapter
+  // is not running or not configured, this silently skips — vault-reporter.ts
+  // below remains the immediate fallback path.
+  if (CADENCE_ADAPTER_URL) {
+    void fetch(`${CADENCE_ADAPTER_URL}/schedule`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ marketId: session.marketId, outcome }),
+    })
+      .then(async (r) => {
+        const result = await r.json() as { status: string; txId: string | null; message: string };
+        addLog(session, `[CadenceScheduler] ${result.message}`, {
+          txHash: result.txId ?? null,
+        });
+      })
+      .catch(() => {
+        addLog(session, '[CadenceScheduler] adapter not reachable — skipped (vault-reporter fallback active)');
+      });
+  }
 
   broadcast(session.marketId, {
     type: 'finalized',
