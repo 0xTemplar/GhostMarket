@@ -7,8 +7,6 @@ import {
   ArrowRight, Ghost, Loader2, Clock, ArrowUpRight,
   RefreshCw, Shield, Lock, Eye, EyeOff, Zap, CheckCircle2, AlertCircle,
 } from 'lucide-react';
-import { mockPositions, mockPortfolioStats } from '@/data/markets';
-import { PortfolioSummary } from '@/components/portfolio-summary';
 import { PortfolioPositionRow } from '@/components/portfolio-position-row';
 import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
 import {
@@ -598,8 +596,7 @@ export default function PortfolioPage() {
 
   const hasOnChain  = onChainPositions.length > 0;
   const hasShielded = shieldedPositions.length > 0;
-  const hasMock     = mockPositions.length > 0;
-  const hasAny      = hasOnChain || hasShielded || hasMock;
+  const hasAny      = hasOnChain || hasShielded;
 
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
@@ -617,12 +614,6 @@ export default function PortfolioPage() {
           </p>
         </div>
 
-        {/* ── Summary (mock only until we have real P&L indexing) ── */}
-        {hasMock && (
-          <div className="mb-8">
-            <PortfolioSummary stats={mockPortfolioStats} />
-          </div>
-        )}
 
         {/* ── Shielded (eAMM) positions ── */}
         {user.loggedIn && isEammDeployed() && (
@@ -728,24 +719,6 @@ export default function PortfolioPage() {
           </div>
         )}
 
-        {/* ── Mock positions (Phase 1 demo data) ── */}
-        {hasMock && (
-          <section>
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-bold text-white">
-                Demo Positions
-              </h2>
-              <span className="text-xs px-2 py-1 rounded-full bg-white/5 text-slate-500">
-                Phase 1 mock data
-              </span>
-            </div>
-            <div className="space-y-3">
-              {mockPositions.map((position, i) => (
-                <PortfolioPositionRow key={position.id} position={position} index={i} />
-              ))}
-            </div>
-          </section>
-        )}
 
         {!hasAny && !loadingChain && (
           <div className="rounded-2xl border border-dashed border-white/10 bg-slate-900 p-16 text-center">
