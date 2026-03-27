@@ -32,16 +32,14 @@ export function AuthButton() {
 
   // Show skeleton while Privy rehydrates — avoids "Sign in" flash on navigation
   if (isLoading) {
-    return (
-      <div className="w-28 h-9 rounded-full bg-white/5 animate-pulse" />
-    );
+    return <div className="w-28 h-9 rounded-full bg-white/5 animate-pulse" />;
   }
 
   if (!user.loggedIn) {
     return (
       <button
         onClick={login}
-        className="px-5 py-2.5 rounded-full text-sm font-semibold bg-indigo-500 hover:bg-indigo-400 text-white transition-all shadow-[0_0_20px_rgba(99,102,241,0.25)] active:scale-95"
+        className="px-5 py-2 rounded-full text-sm font-semibold whitespace-nowrap bg-indigo-500 hover:bg-indigo-400 text-white transition-all shadow-[0_0_20px_rgba(99,102,241,0.25)] active:scale-95"
       >
         Sign in
       </button>
@@ -67,7 +65,7 @@ export function AuthButton() {
           'w-fit flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium border transition-all',
           open
             ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
-            : 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-200'
+            : 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-200',
         )}
       >
         {/* avatar dot */}
@@ -76,7 +74,10 @@ export function AuthButton() {
           {shortenAddr(displayAddr)}
         </span>
         <ChevronDown
-          className={cn('w-3.5 h-3.5 transition-transform', open && 'rotate-180')}
+          className={cn(
+            'w-3.5 h-3.5 transition-transform',
+            open && 'rotate-180',
+          )}
           strokeWidth={2}
         />
       </button>
@@ -86,7 +87,9 @@ export function AuthButton() {
           {/* Header */}
           <div className="px-4 pt-4 pb-3 border-b border-white/5">
             <p className="text-xs text-slate-500 mb-1">Flow Testnet</p>
-            <p className="text-sm font-mono text-slate-200 truncate">{displayAddr}</p>
+            <p className="text-sm font-mono text-slate-200 truncate">
+              {displayAddr}
+            </p>
           </div>
 
           <div className="p-2">
@@ -105,7 +108,10 @@ export function AuthButton() {
                 rel="noreferrer"
                 className="flex items-center gap-3 w-full px-3 py-2 text-sm text-slate-300 hover:bg-white/5 rounded-lg transition-colors"
               >
-                <ExternalLink className="w-4 h-4 text-slate-500" strokeWidth={1.5} />
+                <ExternalLink
+                  className="w-4 h-4 text-slate-500"
+                  strokeWidth={1.5}
+                />
                 View on Flowscan
               </a>
             )}
@@ -114,14 +120,19 @@ export function AuthButton() {
               href="/vault"
               className="flex items-center gap-3 w-full px-3 py-2 text-sm text-slate-300 hover:bg-white/5 rounded-lg transition-colors"
             >
-              <span className="w-4 h-4 flex items-center justify-center text-slate-500 text-xs font-bold">$</span>
+              <span className="w-4 h-4 flex items-center justify-center text-slate-500 text-xs font-bold">
+                $
+              </span>
               Vault & deposits
             </a>
 
             <div className="my-2 h-px bg-white/5" />
 
             <button
-              onClick={() => { logout(); setOpen(false); }}
+              onClick={() => {
+                logout();
+                setOpen(false);
+              }}
               className="flex items-center gap-3 w-full px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
             >
               <LogOut className="w-4 h-4" strokeWidth={1.5} />
