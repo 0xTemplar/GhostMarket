@@ -76,6 +76,11 @@ function getRedisClient(): Redis | null {
       maxRetriesPerRequest: 1,
       enableReadyCheck: false,
     });
+    // Prevent unhandled 'error' events from crashing the process when the
+    // Redis connection is reset (e.g. idle timeout, server restart).
+    redisClient.on('error', (err: Error) => {
+      console.warn('[Settlement/Redis] connection error (non-fatal):', err.message);
+    });
   }
   return redisClient;
 }

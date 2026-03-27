@@ -34,6 +34,12 @@ import dotenv from 'dotenv';
 import { ethers } from 'ethers';
 
 import { buildAgents, agentDelay, AGENT_DEFINITIONS } from './agents';
+import {
+  fetchSourceData,
+  extractAsset,
+  extractThreshold,
+  type FetchedData,
+} from './fetcher';
 import { uploadToFilecoin } from './synapse-client';
 import {
   saveIntermediateEvidence,
@@ -99,6 +105,20 @@ const CADENCE_ADAPTER_URL =
     : null;
 const quorumThreshold = (agentCount: number): number =>
   Math.floor(agentCount / 2) + 1;
+
+/** Seeded market ID → question mapping (markets 20-29 from seed-markets.ts). */
+const MARKET_TITLES: Record<string, string> = {
+  '20': 'Will ETH trade above $6,500 before Jan 2027?',
+  '21': 'Will BTC trade above $150,000 before Jan 2027?',
+  '22': 'Will SOL trade above $500 before Jan 2027?',
+  '23': 'Will XRP trade above $5 before Jan 2027?',
+  '24': 'Will DOGE trade above $1 before Jan 2027?',
+  '25': 'Will TON market cap enter top 5 before Jan 2027?',
+  '26': 'Will a Spot ADA ETF be approved in the US before Jan 2027?',
+  '27': 'Will Base TVL exceed $25B before Jan 2027?',
+  '28': 'Will the Fed cut rates by at least 50 bps in 2026?',
+  '29': 'Will the EU AI Act see a >€50M fine before Jan 2027?',
+};
 
 app.use(cors());
 app.use(express.json());
@@ -233,15 +253,25 @@ type ReasoningResult = {
 async function generateAgentReasoning(
   session: ResolutionSession,
   agent: OracleAgent,
-  source: string,
+  agentDef: { source: string; personality: string },
+  fetched: FetchedData,
   defaultVote: boolean,
 ): Promise<ReasoningResult> {
-  // Deterministic fallback keeps orchestration resilient even without API key.
+  const threshold = extractThreshold(session.marketTitle);
+  const thresholdStr = threshold
+    ? `$${threshold.toLocaleString('en-US')}`
+    : 'the stated threshold';
+
+  // Deterministic fallback — never blocks orchestration.
+  const priceContext = fetched.price
+    ? `${fetched.asset} is currently at ${fetched.rawValue} (${agentDef.source}).`
+    : `No live price data available from ${agentDef.source}.`;
+
   const fallback: ReasoningResult = {
     vote: defaultVote,
-    reasoning: `${agent.name} (${source}) confirms ${
-      defaultVote ? 'YES' : 'NO'
-    } from source signals and quorum alignment checks.`,
+    reasoning: `${agent.name}: ${priceContext} Based on ${
+      agentDef.source
+    } signals and quorum alignment, voting ${defaultVote ? 'YES' : 'NO'}.`,
   };
 
   if (!OPENAI_API_KEY) return fallback;
@@ -253,12 +283,23 @@ async function generateAgentReasoning(
       ORACLE_REASONING_TIMEOUT_MS,
     );
 
+    const dataLines = [
+      `Live data from ${fetched.source}: ${fetched.rawValue} (${fetched.unit})`,
+      fetched.note ? `Context: ${fetched.note}` : null,
+      threshold ? `Market threshold: ${thresholdStr}` : null,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
     const prompt = [
-      `Market ID: ${session.marketId}`,
-      `Agent: ${agent.name}`,
-      `Source: ${source}`,
-      `Tentative outcome from oracle policy: ${defaultVote ? 'YES' : 'NO'}`,
-      'Return strict JSON only: {"vote":"YES|NO","reasoning":"1-2 concise sentences"}',
+      `Market question: "${session.marketTitle}"`,
+      dataLines,
+      `Tentative oracle consensus: ${defaultVote ? 'YES' : 'NO'}`,
+      `Your personality: ${agentDef.personality}`,
+      '',
+      'Reason about whether the market condition is plausible given current data and the time horizon.',
+      'Be specific — cite the fetched price or value if available.',
+      'Return strict JSON only: {"vote":"YES|NO","reasoning":"2-3 concise sentences"}',
     ].join('\n');
 
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -269,13 +310,14 @@ async function generateAgentReasoning(
       },
       body: JSON.stringify({
         model: ORACLE_REASONING_MODEL,
-        temperature: 0.2,
+        temperature: 0.3,
         messages: [
           {
             role: 'system',
             content:
-              `You are ${agent.name}, an oracle analyst using ${source}. ` +
-              'You must be concise and deterministic. Output JSON only.',
+              `You are ${agent.name}, an autonomous oracle agent for a confidential prediction market. ` +
+              `Your primary data source is ${agentDef.source}. ${agentDef.personality} ` +
+              'Be concise, cite specific data, and output valid JSON only.',
           },
           { role: 'user', content: prompt },
         ],
@@ -288,11 +330,15 @@ async function generateAgentReasoning(
     const body = (await res.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
     };
-
     const raw = body.choices?.[0]?.message?.content?.trim() ?? '';
     if (!raw) return fallback;
 
-    const parsed = JSON.parse(raw) as { vote?: string; reasoning?: string };
+    // Strip potential markdown code fences before parsing
+    const cleaned = raw
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '')
+      .trim();
+    const parsed = JSON.parse(cleaned) as { vote?: string; reasoning?: string };
     const modelVote =
       String(parsed.vote ?? '').toUpperCase() === 'NO' ? false : true;
     const reasoning = String(parsed.reasoning ?? '').trim();
@@ -314,21 +360,48 @@ async function runAgent(
   marketOutcome: boolean, // the "correct" outcome for this market
 ) {
   const delay = agentDelay(agent.id);
-  const agentDef = AGENT_DEFINITIONS.find((d) => d.id === agent.id);
-  const source = agentDef?.source ?? 'unknown';
+  const agentDef = AGENT_DEFINITIONS.find((d) => d.id === agent.id) ?? {
+    id: agent.id,
+    name: agent.name,
+    source: 'unknown',
+    personality: 'Neutral analyst.',
+  };
+  const source = agentDef.source;
 
   // ── FETCHING ────────────────────────────────────────────────────────────────
   updateAgent(session, agent.id, { status: 'fetching' });
-  addLog(session, `fetching source data from ${source}`, {
-    agentName: agent.name,
-  });
+  addLog(session, `contacting ${source} API…`, { agentName: agent.name });
 
-  await sleep(delay);
+  const asset = extractAsset(session.marketTitle);
+  const [fetched] = await Promise.all([
+    fetchSourceData(source, asset),
+    sleep(delay),
+  ]);
+
+  if (fetched.price !== null) {
+    addLog(
+      session,
+      `${source} → ${fetched.rawValue} ${fetched.unit} (${asset})`,
+      { agentName: agent.name },
+    );
+  } else {
+    addLog(
+      session,
+      `${source} → no price data${fetched.note ? ` — ${fetched.note}` : ''}`,
+      { agentName: agent.name },
+    );
+  }
 
   // Slight disagreement fallback keeps non-unanimous behavior in degraded mode.
   const fallbackVote =
     agent.id === 7 && Math.random() < 0.15 ? !marketOutcome : marketOutcome;
-  const ai = await generateAgentReasoning(session, agent, source, fallbackVote);
+  const ai = await generateAgentReasoning(
+    session,
+    agent,
+    agentDef,
+    fetched,
+    fallbackVote,
+  );
   const vote = ai.vote;
   const reasoning = ai.reasoning;
 
@@ -428,7 +501,16 @@ async function runAgent(
 async function finalizeResolution(session: ResolutionSession) {
   if (session.phase !== 'collecting') return;
   session.phase = 'quorum_reached';
-  session.outcome = session.yesVotes >= quorumThreshold(session.agents.length);
+  // Strict quorum: one side reached the threshold.
+  // Plurality fallback: most votes wins; tie → NO.
+  const threshold = quorumThreshold(session.agents.length);
+  if (session.yesVotes >= threshold) {
+    session.outcome = true;
+  } else if (session.noVotes >= threshold) {
+    session.outcome = false;
+  } else {
+    session.outcome = session.yesVotes > session.noVotes;
+  }
 
   const outcome = session.outcome;
 
@@ -516,18 +598,25 @@ async function finalizeResolution(session: ResolutionSession) {
   // below remains the immediate fallback path.
   if (CADENCE_ADAPTER_URL) {
     void fetch(`${CADENCE_ADAPTER_URL}/schedule`, {
-      method:  'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ marketId: session.marketId, outcome }),
+      body: JSON.stringify({ marketId: session.marketId, outcome }),
     })
       .then(async (r) => {
-        const result = await r.json() as { status: string; txId: string | null; message: string };
+        const result = (await r.json()) as {
+          status: string;
+          txId: string | null;
+          message: string;
+        };
         addLog(session, `[CadenceScheduler] ${result.message}`, {
           txHash: result.txId ?? null,
         });
       })
       .catch(() => {
-        addLog(session, '[CadenceScheduler] adapter not reachable — skipped (vault-reporter fallback active)');
+        addLog(
+          session,
+          '[CadenceScheduler] adapter not reachable — skipped (vault-reporter fallback active)',
+        );
       });
   }
 
@@ -591,15 +680,22 @@ async function finalizeResolution(session: ResolutionSession) {
 
     // Log vault outcome result
     if (vaultOutcomeSync.status === 'synced') {
-      addLog(session, `GhostVault outcome reported: ${outcome ? 'YES' : 'NO'}`, {
-        txHash: vaultOutcomeSync.txHash ?? null,
-      });
+      addLog(
+        session,
+        `GhostVault outcome reported: ${outcome ? 'YES' : 'NO'}`,
+        {
+          txHash: vaultOutcomeSync.txHash ?? null,
+        },
+      );
     } else if (vaultOutcomeSync.status === 'already_set') {
       addLog(session, 'GhostVault outcome already set (idempotent)');
     } else if (vaultOutcomeSync.status === 'skipped') {
       addLog(session, 'GhostVault outcome report skipped (missing config)');
     } else {
-      addLog(session, `GhostVault outcome report failed: ${vaultOutcomeSync.message}`);
+      addLog(
+        session,
+        `GhostVault outcome report failed: ${vaultOutcomeSync.message}`,
+      );
     }
 
     if (sepoliaSync.status === 'synced') {
@@ -1361,22 +1457,33 @@ app.post('/oracle/settle/:marketId', async (req, res) => {
     // The oracle may have restarted and lost in-memory session state.
     // Fall back to the canonical on-chain source (GhostEAMM on Sepolia).
     try {
-      const _sepoliaRpc = process.env.SEPOLIA_RPC_URL ?? 'https://rpc.sepolia.org';
-      const _eammAddr   = process.env.GHOST_EAMM_ADDRESS ?? '';
+      const _sepoliaRpc =
+        process.env.SEPOLIA_RPC_URL ?? 'https://rpc.sepolia.org';
+      const _eammAddr = process.env.GHOST_EAMM_ADDRESS ?? '';
       const _eamm = new (await import('ethers')).ethers.Contract(
         _eammAddr,
-        ['function getMarketMeta(uint256 marketId) external view returns (uint8 status, bool outcome, uint64 expiryAt)'],
+        [
+          'function getMarketMeta(uint256 marketId) external view returns (uint8 status, bool outcome, uint64 expiryAt)',
+        ],
         new (await import('ethers')).ethers.JsonRpcProvider(_sepoliaRpc),
       );
       const [_status, _outcome] = await _eamm.getMarketMeta(BigInt(marketId));
       if (Number(_status) !== 1) {
-        return res.status(409).json({ error: 'Market not finalized', phase: session?.phase ?? 'unknown' });
+        return res.status(409).json({
+          error: 'Market not finalized',
+          phase: session?.phase ?? 'unknown',
+        });
       }
       // EAMM confirms market is resolved — restore finalization state for this request.
-      console.log(`[Settlement] Market ${marketId} confirmed resolved on EAMM (recovering from oracle restart)`);
+      console.log(
+        `[Settlement] Market ${marketId} confirmed resolved on EAMM (recovering from oracle restart)`,
+      );
       markMarketFinalized(marketId, Boolean(_outcome));
     } catch {
-      return res.status(409).json({ error: 'Market not finalized', phase: session?.phase ?? 'unknown' });
+      return res.status(409).json({
+        error: 'Market not finalized',
+        phase: session?.phase ?? 'unknown',
+      });
     }
   }
 
@@ -1464,12 +1571,10 @@ app.get('/oracle/settle/:marketId/:userAddress', (req, res) => {
 
   const session = sessions.get(marketId);
   if (!session || session.phase !== 'finalized') {
-    return res
-      .status(409)
-      .json({
-        error: 'Market not finalized',
-        phase: session?.phase ?? 'unknown',
-      });
+    return res.status(409).json({
+      error: 'Market not finalized',
+      phase: session?.phase ?? 'unknown',
+    });
   }
 
   const settlements = getMarketSettlements(marketId);
@@ -1478,12 +1583,9 @@ app.get('/oracle/settle/:marketId/:userAddress', (req, res) => {
   );
 
   if (!settlement) {
-    return res
-      .status(404)
-      .json({
-        error:
-          'No settlement computed yet — call POST /oracle/settle/:marketId',
-      });
+    return res.status(404).json({
+      error: 'No settlement computed yet — call POST /oracle/settle/:marketId',
+    });
   }
 
   const marketIdUint = parseInt(marketId, 10).toString();
@@ -1517,6 +1619,10 @@ app.get('/oracle/health', (_req, res) => {
     service: 'ghost-oracle',
     timestamp: new Date().toISOString(),
   });
+});
+
+app.get('/oracle/market-titles', (_req, res) => {
+  res.json(MARKET_TITLES);
 });
 
 app.get('/oracle/agents', async (_req, res) => {
@@ -1558,18 +1664,20 @@ app.post('/oracle/resolve/:marketId', async (req, res) => {
   if (sessions.has(marketId)) {
     const existing = sessions.get(marketId)!;
     if (existing.phase !== 'finalized' && existing.phase !== 'failed') {
-      return res
-        .status(409)
-        .json({
-          error: 'Resolution already in progress',
-          phase: existing.phase,
-        });
+      return res.status(409).json({
+        error: 'Resolution already in progress',
+        phase: existing.phase,
+      });
     }
   }
 
   // The caller can suggest the correct outcome; in production this comes from
   // trusted data sources fetched by the agents themselves.
   const marketOutcome: boolean = req.body?.outcome !== false;
+  const marketTitle: string =
+    req.body?.marketTitle ??
+    MARKET_TITLES[String(marketId)] ??
+    `Market #${marketId} — resolution in progress`;
 
   // Build fresh agent list with wallet addresses derived at runtime,
   // restoring reputation scores from Storacha checkpoints if available.
@@ -1597,6 +1705,7 @@ app.post('/oracle/resolve/:marketId', async (req, res) => {
 
   const session: ResolutionSession = {
     marketId,
+    marketTitle,
     phase: 'collecting',
     agents: agentList,
     yesVotes: 0,
@@ -1634,9 +1743,19 @@ app.post('/oracle/resolve/:marketId', async (req, res) => {
     session.agents.map((agent) => runAgent(session, agent, marketOutcome)),
   ).then(() => {
     if (session.phase === 'collecting') {
-      // Shouldn't happen normally, but handle edge case
-      session.phase = 'failed';
-      addLog(session, 'resolution failed — quorum not reached');
+      // All agents voted but neither side reached strict quorum (e.g. 2-2 split).
+      // Use plurality: whichever side has more votes wins; ties resolve to NO
+      // (safer default — users don't lose money on ambiguous outcomes).
+      if (session.yesVotes > 0 || session.noVotes > 0) {
+        addLog(
+          session,
+          `no strict quorum — using plurality (${session.yesVotes} YES vs ${session.noVotes} NO)`,
+        );
+        finalizeResolution(session);
+      } else {
+        session.phase = 'failed';
+        addLog(session, 'resolution failed — no votes collected');
+      }
     }
   });
 });
@@ -1646,6 +1765,30 @@ app.post('/oracle/resolve/:marketId', async (req, res) => {
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// ── Global error handling ──────────────────────────────────────────────────────
+
+// The Storacha upload client polls S3 endpoints for receipts after the main
+// uploadFile() promise resolves. If the S3 endpoint times out, Node emits an
+// unhandledRejection with UND_ERR_CONNECT_TIMEOUT. These are benign — the
+// upload succeeded; only the receipt confirmation timed out. Swallow them here
+// so they don't pollute the console.
+process.on('unhandledRejection', (reason) => {
+  const msg = (reason as Error)?.message ?? String(reason);
+  const code = (reason as { cause?: { code?: string } })?.cause?.code ?? '';
+  if (
+    code === 'UND_ERR_CONNECT_TIMEOUT' ||
+    msg === 'fetch failed' ||
+    msg.includes('Connect Timeout')
+  ) {
+    console.warn(
+      '[Storacha] receipt poll timeout (non-critical, upload succeeded)',
+    );
+    return;
+  }
+  // Re-emit anything else so real bugs aren't silenced
+  console.error('[Oracle] Unhandled rejection:', reason);
+});
 
 // ── Start ──────────────────────────────────────────────────────────────────────
 

@@ -284,21 +284,39 @@ export async function triggerOracleAiResolution(
 /**
  * Trigger oracle resolution workflow for a market.
  * Intended for admin/ops control panel usage.
+ *
+ * @param marketTitle  Optional market question string passed to agents for
+ *                     grounded GPT reasoning (e.g. "Will ETH trade above $6,500?").
  */
 export async function triggerOracleResolution(
   marketId: string | number,
   outcome: boolean,
+  marketTitle?: string,
 ): Promise<{ marketId: string; status: string; wsUrl?: string }> {
   const res = await fetch(`${ORACLE_API_BASE}/resolve/${marketId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ outcome }),
+    body: JSON.stringify({
+      outcome,
+      ...(marketTitle ? { marketTitle } : {}),
+    }),
   });
   const body = await res.json().catch(() => ({ error: res.statusText }));
   if (!res.ok) {
     throw new Error(body.error ?? `Oracle error ${res.status}`);
   }
   return body as { marketId: string; status: string; wsUrl?: string };
+}
+
+/** Fetch the market ID → question mapping from the oracle. */
+export async function getMarketTitles(): Promise<Record<string, string>> {
+  try {
+    const res = await fetch(`${ORACLE_API_BASE}/market-titles`);
+    if (!res.ok) return {};
+    return (await res.json()) as Record<string, string>;
+  } catch {
+    return {};
+  }
 }
 
 /**

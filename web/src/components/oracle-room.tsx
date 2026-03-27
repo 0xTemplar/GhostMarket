@@ -17,6 +17,7 @@ import {
   Activity,
 } from 'lucide-react';
 import {
+  getMarketTitles,
   getOracleSession,
   triggerOracleResolution,
   type OracleAgentView,
@@ -232,10 +233,12 @@ const AGENT_STATUS_CFG: Record<string, { color: string }> = {
   suspended: { color: 'text-orange-400' },
 };
 
-const AGENT_SOURCE: Record<string, string> = {
-  Cipher: 'Binance',
+// Fallback source labels for the 4 active agents.
+// Agent cards prefer agent.source from the WS payload when present.
+const AGENT_SOURCE_FALLBACK: Record<string, string> = {
+  Cipher:  'Binance',
   Specter: 'CoinGecko',
-  Wraith: 'Chainlink',
+  Wraith:  'Chainlink',
   Phantom: 'Coinbase',
 };
 
@@ -312,9 +315,9 @@ function AgentCard({ agent }: { agent: OracleAgentView }) {
             <span className="truncate font-semibold text-white">
               {agent.name}
             </span>
-            {AGENT_SOURCE[agent.name] && (
+            {(agent.source ?? AGENT_SOURCE_FALLBACK[agent.name]) && (
               <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[9px] tracking-wide text-slate-400 uppercase">
-                {AGENT_SOURCE[agent.name]}
+                {agent.source ?? AGENT_SOURCE_FALLBACK[agent.name]}
               </span>
             )}
           </div>
@@ -545,7 +548,9 @@ function HashRow({
 // ── main component ────────────────────────────────────────────────────────────
 
 export function OracleRoom() {
-  const [marketId, setMarketId] = useState('6');
+  const [marketId, setMarketId] = useState('25');
+  const [marketTitle, setMarketTitle] = useState('');
+  const [marketTitles, setMarketTitles] = useState<Record<string, string>>({});
   const [session, setSession] = useState<OracleSession | null>(null);
   const [lastSettlement, setLastSettlement] = useState<{
     payout: string; isWinner: boolean; txHash: string | null;
@@ -724,7 +729,7 @@ export function OracleRoom() {
     setResolving(true);
     setError(null);
     try {
-      await triggerOracleResolution(marketId, true);
+      await triggerOracleResolution(marketId, true, marketTitle || undefined);
       connectWs(marketId);
       const latest = await getOracleSession(marketId);
       if (latest) setSession(latest);
@@ -733,7 +738,7 @@ export function OracleRoom() {
     } finally {
       setResolving(false);
     }
-  }, [marketId, connectWs]);
+  }, [marketId, marketTitle, connectWs]);
 
   useEffect(
     () => () => {
@@ -741,6 +746,21 @@ export function OracleRoom() {
     },
     [],
   );
+
+  // Fetch market title map once on mount
+  useEffect(() => {
+    getMarketTitles().then((titles) => {
+      setMarketTitles(titles);
+      setMarketTitle(titles['25'] ?? '');
+    });
+  }, []);
+
+  // Auto-populate market title when marketId changes
+  useEffect(() => {
+    if (marketTitles[marketId]) {
+      setMarketTitle(marketTitles[marketId]);
+    }
+  }, [marketId, marketTitles]);
 
   // auto-scroll log
   useEffect(() => {
@@ -911,45 +931,60 @@ export function OracleRoom() {
         </div>
 
         {/* controls */}
-        <div className="relative mt-5 flex flex-wrap items-end gap-3">
-          <div className="flex flex-col gap-1">
-            <label className="font-mono text-[9px] tracking-widest text-slate-600 uppercase">
-              Market ID
-            </label>
-            <input
-              value={marketId}
-              onChange={(e) => setMarketId(e.target.value)}
-              className="h-9 w-28 rounded-lg border border-white/8 bg-slate-900 px-3 font-mono text-sm text-white placeholder:text-slate-700 focus:border-indigo-400/50 focus:outline-none"
-            />
+        <div className="relative mt-5 space-y-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="font-mono text-[9px] tracking-widest text-slate-600 uppercase">
+                Market ID
+              </label>
+              <input
+                value={marketId}
+                onChange={(e) => setMarketId(e.target.value)}
+                className="h-9 w-28 rounded-lg border border-white/8 bg-slate-900 px-3 font-mono text-sm text-white placeholder:text-slate-700 focus:border-indigo-400/50 focus:outline-none"
+              />
+            </div>
+            <button
+              onClick={loadSession}
+              disabled={loadingSession}
+              className="h-9 rounded-lg border border-white/8 bg-slate-800/80 px-4 text-sm text-slate-300 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {loadingSession ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                'Load Session'
+              )}
+            </button>
+            <button
+              onClick={startResolve}
+              disabled={resolving}
+              className="h-9 rounded-lg border border-indigo-400/30 bg-slate-900 px-5 text-sm font-semibold text-indigo-200 transition-all duration-200 hover:border-indigo-300/50 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {resolving ? (
+                <span className="flex items-center gap-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Starting…
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5">
+                  <Zap className="h-3.5 w-3.5" />
+                  Trigger Agent Resolve
+                </span>
+              )}
+            </button>
           </div>
-          <button
-            onClick={loadSession}
-            disabled={loadingSession}
-            className="h-9 rounded-lg border border-white/8 bg-slate-800/80 px-4 text-sm text-slate-300 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {loadingSession ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              'Load Session'
-            )}
-          </button>
-          <button
-            onClick={startResolve}
-            disabled={resolving}
-            className="h-9 rounded-lg border border-indigo-400/30 bg-slate-900 px-5 text-sm font-semibold text-indigo-200 transition-all duration-200 hover:border-indigo-300/50 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {resolving ? (
-              <span className="flex items-center gap-2">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Starting…
+
+          {/* Market question — auto-looked up from market ID, passed to agents */}
+          {marketTitle && (
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[9px] tracking-widest text-slate-600 uppercase shrink-0">
+                Question
               </span>
-            ) : (
-              <span className="flex items-center gap-1.5">
-                <Zap className="h-3.5 w-3.5" />
-                Trigger Agent Resolve
+              <span className="font-mono text-xs text-slate-400 truncate">
+                {marketTitle}
               </span>
-            )}
-          </button>
+            </div>
+          )}
+
           <p className="text-[10px] text-slate-500 font-mono">
             Outcome is determined by agent quorum.
           </p>

@@ -3,10 +3,10 @@
   "agent-3-market-1-evidence": "bafkreico7k274zdxmxqt3ki2aybyg22qgccedldbo46emimnk3amjhq5ua",
   "agent-2-market-1-evidence": "bafkreifgtkjctuywqcjs6bv5ll7aewnirn5fiu5sw3ksa6moqrsv2hom6u",
   "agent-1-market-1-evidence": "bafkreihffr2cdg2lewmpayc776r3jokzv7jg6upboy2ksogbdcy5j2rxca",
-  "agent-4-checkpoint": "bafkreicmsw4vtbpr332javsthousjhrlidyy3zpa2egwedl2576ygeq6e4",
-  "agent-3-checkpoint": "bafkreicc2hkanlbqdoxjj53rpcpozfgn6qxszscxphngl4lm67qvp5cmiu",
-  "agent-1-checkpoint": "bafkreifbkts6o6n7yrhiut24rspxgfp4emmbamnj4cmaiwo5aeo5isxlwa",
-  "agent-2-checkpoint": "bafkreia5b763ttjlmigeuhptqjceettslejwcvyzbxymt47fjp7ngkebxa",
+  "agent-4-checkpoint": "bafkreidmtwacwwxc633olkkbjngkzkghcfiakfht2x5et6gaaj54zpblba",
+  "agent-3-checkpoint": "bafkreia7nubn3r3f6oidcx472hd3rguvqgphepxdjwqf6d6cor6w3dwmim",
+  "agent-1-checkpoint": "bafkreihodgvdkavynoz4sc2eqc43tu3hqclprdwtpuyz7gt45hsmhn642i",
+  "agent-2-checkpoint": "bafkreiakg7mri66hy234pbjsymndsbsx3hli2krf53po4ks55raedgzqbm",
   "agent-1-market-6-evidence": "bafkreielfkrmdlxxwz5fi22nrauvosqmg2mihfliioax3zabjbnizqxqby",
   "agent-4-market-6-evidence": "bafkreidthsnxxv6lbjnnqjo3abjf4lutzei4yscopwmoumxrsrxesysedy",
   "agent-3-market-6-evidence": "bafkreia6k3wmqfcegnqhv4mo7e2vjayz3lzvzdo4rhzknhptprnp424rdy",
@@ -89,5 +89,9 @@
   "agent-1-market-18-evidence": "bafkreigjd3ig5nzb4cfbtgasbwkphnqvj6resr6b7rdjcstcgljjcq3oi4",
   "agent-4-market-19-evidence": "bafkreib5encsjjedn5gaxwhch6ueukzvoysbd5b6u6636wv6oapbkbgmti",
   "agent-2-market-19-evidence": "bafkreifmz4pfpehkkrnvmxvthvif4htvqsiygt2e7unvo5b7kuj6eyurgq",
-  "agent-3-market-19-evidence": "bafkreicmfcq6tjcl7s2mo4dchof5oj7nha7vovfismvo4wl5ijk2gjx5ey"
+  "agent-3-market-19-evidence": "bafkreicmfcq6tjcl7s2mo4dchof5oj7nha7vovfismvo4wl5ijk2gjx5ey",
+  "agent-3-market-25-evidence": "bafkreifnekar6zhyimcvs2vvt7rpuhxdehn2zth7wc3xzabmqq2mu62v4q",
+  "agent-4-market-25-evidence": "bafkreibkvjbo5ikcyq2jdiw2fkdwetrejglvexncd72ogx2flbtuqjbidm",
+  "agent-2-market-25-evidence": "bafkreihqq4nz4pptnfugnt27gnbiwppwsfvmnwgjvw5gaaruyej6qu6rle",
+  "agent-1-market-25-evidence": "bafkreid2fgz64jjcs6govgnmostoomqfbxfzju6atnkn4y63ybuysyt2ji"
 }

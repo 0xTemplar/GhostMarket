@@ -35,6 +35,7 @@ export type ResolutionPhase =
 
 export interface ResolutionSession {
   marketId: string;
+  marketTitle: string;   // e.g. "Will ETH trade above $6,500 before Jan 2027?"
   phase: ResolutionPhase;
   agents: OracleAgent[];
   yesVotes: number;
