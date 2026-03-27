@@ -117,25 +117,32 @@ function HomeContent() {
       }
     }
 
+    const liveFirst = (a: Market, b: Market) =>
+      (b.isLive ? 1 : 0) - (a.isLive ? 1 : 0);
+
     switch (sort) {
       case 'volume':
-        list.sort((a, b) => b.volume - a.volume);
+        list.sort((a, b) => liveFirst(a, b) || b.volume - a.volume);
         break;
       case 'newest':
         list.sort(
           (a, b) =>
+            liveFirst(a, b) ||
             new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
         );
         break;
       case 'ending-soon':
         list.sort(
           (a, b) =>
+            liveFirst(a, b) ||
             new Date(a.expiryAt).getTime() - new Date(b.expiryAt).getTime(),
         );
         break;
       case 'trending':
       default:
         list.sort((a, b) => {
+          const live = liveFirst(a, b);
+          if (live !== 0) return live;
           if (a.trending !== b.trending) return a.trending ? -1 : 1;
           return b.volume - a.volume;
         });

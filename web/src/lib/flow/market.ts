@@ -458,6 +458,7 @@ export function toFrontendMarket(m: OnChainMarket): Market {
 
   return {
     id: String(m.id),   // on-chain IDs are numbers; UI uses string IDs
+    isLive: true,
     title: m.title,
     description: m.description,
     category: m.category as Market['category'],

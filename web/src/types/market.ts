@@ -11,6 +11,7 @@ export type MarketCategory =
 export interface Market {
   id: string;
   title: string;
+  isLive?: boolean;
   description: string;
   category: MarketCategory;
   image?: string;
