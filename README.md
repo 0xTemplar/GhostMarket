@@ -1,6 +1,6 @@
 # GhostMarket
 
-Confidential dark-pool prediction markets with shielded execution. Phase 1: product skeleton (Next.js + FastAPI, mocked data).
+GhostMarket is a confidential prediction market that uses Fully Homomorphic Encryption to hide order intent, position size, and balances during execution. Flow serves as the consumer layer for walletless onboarding, collateral custody, and scheduled market resolution via Cadence. Zama powers the encrypted eAMM engine, implementing 8 distinct FHE primitives—notably combining FHE.gt and FHE.select to enforce minimum-bet guards homomorphically without ever leaking plaintext amounts. Lit Protocol executes cross-chain TEE settlement without relying on a vulnerable token bridge. Finally, Filecoin and Storacha provide verifiable oracle memory, with ERC-8004 creating the portable identity trail every agent leaves behind.
 
 ## Quick start
 
