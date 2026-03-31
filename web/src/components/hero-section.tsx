@@ -13,10 +13,10 @@ import {
 // ─── Platform stats ────────────────────────────────────────────────────────────
 
 const PLATFORM_STATS = [
-  { label: 'Total Volume',   value: '$8.2M'  },
-  { label: 'Active Markets', value: '47'     },
-  { label: 'Traders',        value: '18.4K'  },
-  { label: 'Privacy',        value: '100%'   },
+  { label: 'Active Markets', value: '12'    },
+  { label: 'Oracle Agents',  value: '7'     },
+  { label: 'Tests Passing',  value: '101'   },
+  { label: 'Privacy',        value: '100%'  },
 ];
 
 // ─── Live ticker data ──────────────────────────────────────────────────────────

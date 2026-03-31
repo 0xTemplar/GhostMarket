@@ -6,10 +6,10 @@ import { Wallet, Star, ChevronRight, Radar } from 'lucide-react';
 // ─── Platform stats ────────────────────────────────────────────────────────────
 
 const PLATFORM_STATS = [
-  { label: '24h Vol',  value: '$1.4M' },
-  { label: 'Traders',  value: '18.4K' },
-  { label: 'Markets',  value: '47'    },
-  { label: 'Private',  value: '100%'  },
+  { label: 'Markets',   value: '12'    },
+  { label: 'Agents',    value: '7'     },
+  { label: 'Contracts', value: '4'     },
+  { label: 'Private',   value: '100%'  },
 ];
 
 // ─── Trending topics ───────────────────────────────────────────────────────────
@@ -33,7 +33,7 @@ const recentActivity = [
     user: '0x7a3f…',
     side: 'Yes' as const,
     price: '42¢',
-    amount: '$120',
+    amount: '••••',
     minsAgo: 1,
   },
   {
@@ -41,7 +41,7 @@ const recentActivity = [
     user: 'fmichael',
     side: 'No' as const,
     price: '32¢',
-    amount: '$85',
+    amount: '••••',
     minsAgo: 3,
   },
   {
@@ -49,7 +49,7 @@ const recentActivity = [
     user: '0x9c1a…',
     side: 'Yes' as const,
     price: '31¢',
-    amount: '$200',
+    amount: '••••',
     minsAgo: 7,
   },
 ];
