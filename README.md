@@ -30,6 +30,7 @@
 - [Tech Stack](#tech-stack)
   - [Flow — Consumer Layer](#flow--consumer-layer)
   - [Zama — eAMM Execution Engine](#zama--eamm-execution-engine)
+    - [Compliance Model](#compliance-model--trader-private-not-authority-private)
   - [Lit Protocol — Cross-Chain Settlement](#lit-protocol--cross-chain-settlement)
   - [Filecoin — Verifiable Oracle Memory](#filecoin--verifiable-oracle-memory)
   - [Storacha — Persistent Agent State](#storacha--persistent-agent-state)
@@ -278,6 +279,8 @@ cadence/contracts/GhostVaultResolver.cdc — Cadence scheduling adapter
 
 `GhostEAMM.sol` is the confidential execution layer. It is a binary prediction market AMM where every financial value — bet amounts, pool totals, per-user positions — is an encrypted `euint64`. The Zama FHE coprocessor processes all arithmetic. No plaintext amount ever appears in calldata, events, or storage.
 
+The privacy model is **trader-private, not authority-private** — position sizes are hidden from other market participants, but regulators and auditors retain defined, on-chain access paths to resolved market data. This is an explicit design choice to make confidential finance viable in regulated environments.
+
 **FHE primitives used:**
 
 | Primitive | Where | Purpose |
@@ -330,6 +333,29 @@ event BetPlaced(uint256 indexed marketId, address indexed user, bool indexed sid
 ```
 
 > [Live tx: `0x5994971938fcce4b...`](https://sepolia.etherscan.io/tx/0x5994971938fcce4b63f3691218a62286963d57fe6b224e07879319691f6e9350)
+
+#### Compliance Model — Trader-Private, Not Authority-Private
+
+GhostMarket's privacy design is not a black box. It is deliberately scoped to protect traders from each other — not to shield activity from auditors, regulators, or the protocol itself. This is the critical distinction that makes FHE viable in regulated finance.
+
+The Zama ACL system enforces this at the contract level:
+
+| Role | Access | Mechanism |
+|---|---|---|
+| **User (self)** | Can always decrypt their own position | `FHE.allow(position, msg.sender)` on `placeBet` |
+| **Contract** | Full access to its own ciphertext handles | `FHE.allowThis(...)` throughout |
+| **Oracle / resolver** | Pool access granted only after market resolution | `FHE.allow(pool, resolver)` on `resolveMarket` |
+| **Lit PKP** | Position + pool access for payout computation | `grantPositionAccess()` — explicit, auditable grant |
+| **Other traders** | No access — ever | No ACL entry is ever written for third parties |
+
+What this means in practice:
+
+- A **regulator or auditor** can always access resolved market data — the oracle, the Lit PKP, and the protocol DAO each have a defined ACL path. There is no "unbreakable" privacy layer; access control is governed by explicit on-chain grants, not cryptographic impossibility.
+- An **institutional participant** is protected from competitors seeing their position size before settlement — exactly the privacy that matters for hedging without signaling.
+- **KYC/AML compatibility** is preserved by design. Privy handles user identity at the application layer, binding every embedded wallet to a verified email, Google account, or passkey. User addresses are public on-chain. The `BetPlaced` event always emits the user's address and side — only the amount is encrypted. Law enforcement with a valid legal process has a clear identity trail from wallet address → Privy identity → user account.
+- **Payout amounts are verified on-chain** by `GhostVault.computeExpectedPayout()`. The oracle cannot produce an inflated payout even with a valid signature. The binary outcome (YES/NO) is the only oracle-attested value — and it is public, disputable, and slash-penalized.
+
+This model maps directly to how institutional dark pools operate in traditional finance: execution size is private from other participants, but reportable to clearing houses and regulators through defined access paths. GhostMarket implements the same principle on-chain using FHE ACLs instead of legal agreements.
 
 **Relevant files:**
 ```
