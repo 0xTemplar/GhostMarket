@@ -12,7 +12,7 @@
 [![Tests](https://img.shields.io/badge/Tests-101_passing-22C55E?style=flat-square)](#testing)
 [![License](https://img.shields.io/badge/License-MIT-gray?style=flat-square)](LICENSE)
 
-![Ghost-header](https://github.com/user-attachments/assets/1f06f259-2231-44b9-8413-c084a781c67a)
+![Ghost-market-header](https://github.com/user-attachments/assets/60eec664-d53f-4ff1-8589-a7803037e691)
 
 *Your position size is invisible to everyone. The chain. The oracle. The block explorer. Us.*
 
