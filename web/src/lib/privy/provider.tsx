@@ -69,8 +69,9 @@ export function AppProviders({ children }: { children: ReactNode }) {
         // Creates a Flow EVM wallet automatically on first login.
         // No seed phrase, no extension, no mobile app.
         embeddedWallets: {
-          createOnLogin: 'users-without-wallets',
-          requireUserPasswordOnCreate: false,
+          ethereum: {
+            createOnLogin: 'users-without-wallets',
+          },
         },
 
         // ── Chain config ─────────────────────────────────────────────────────

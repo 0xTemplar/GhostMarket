@@ -1,6 +1,6 @@
 'use client';
 
-import { motion } from 'framer-motion';
+import { motion, type Variants } from 'framer-motion';
 import { TrendingUp, TrendingDown, Layers, Target } from 'lucide-react';
 import type { PortfolioStats } from '@/types/market';
 import { formatCurrency, formatPercent, cn } from '@/lib/utils';
@@ -9,12 +9,12 @@ interface PortfolioSummaryProps {
   stats: PortfolioStats;
 }
 
-const cardVariants = {
+const cardVariants: Variants = {
   hidden: { opacity: 0, y: 12 },
   visible: (i: number) => ({
     opacity: 1,
     y: 0,
-    transition: { delay: i * 0.08, duration: 0.35, ease: 'easeOut' },
+    transition: { delay: i * 0.08, duration: 0.35, ease: 'easeOut' as const },
   }),
 };
 
