@@ -1,6 +1,6 @@
 <div align="center">
 
-# 👻 GhostMarket
+#  GhostMarket
 
 **Confidential Dark-Pool Prediction Markets**
 
@@ -14,7 +14,7 @@
 
 ![Ghost-market-header](https://github.com/user-attachments/assets/60eec664-d53f-4ff1-8589-a7803037e691)
 
-*Your position size is invisible to everyone. The chain. The oracle. The block explorer. Us.*
+*Your position size is invisible to the market. The chain. The oracle. The block explorer. Front-runners.*
 
 </div>
 
