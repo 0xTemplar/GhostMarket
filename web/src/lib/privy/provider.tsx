@@ -63,7 +63,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
       appId={PRIVY_APP_ID}
       config={{
         // ── Auth methods ────────────────────────────────────────────────────
-        loginMethods: ['email', 'google', 'passkey'],
+        loginMethods: ['email', 'google'],
 
         // ── Embedded wallet ─────────────────────────────────────────────────
         // Creates a Flow EVM wallet automatically on first login.
