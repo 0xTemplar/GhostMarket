@@ -40,6 +40,9 @@
 - [End-to-End User Journey](#end-to-end-user-journey)
 - [Oracle Room](#oracle-room)
 - [Contract Addresses](#contract-addresses)
+  - [EVM Contracts](#evm-contracts)
+  - [Cadence Contract — Flow Native](#cadence-contract--flow-native)
+  - [Zama / FHE Infrastructure](#zama--fhe-infrastructure-sepolia)
 - [Confirmed On-Chain Transactions](#confirmed-on-chain-transactions)
 - [Running Locally](#running-locally)
 - [Testing](#testing)
@@ -599,7 +602,7 @@ The Oracle Room (`/oracle`) is the live swarm dashboard. It shows:
 - Quorum progress bar (5-of-7 threshold)
 - Per-agent reputation scores
 - Filecoin Piece CID proof links — verifiable by anyone, no credentials required
-- 29 scheduled Cadence deliveries on Flowscan — resolution fires even if the oracle goes offline
+- 29 [scheduled Cadence deliveries](https://testnet.flowscan.io/contract/A.59403984ca469d1c.GhostVaultResolverHandler?tab=scheduled) on Flowscan — resolution fires even if the oracle goes offline
 
 > Each attestation is anchored on-chain. You can pull any Piece CID right now and verify the agent's reasoning directly from Filecoin.
 
@@ -607,13 +610,30 @@ The Oracle Room (`/oracle`) is the live swarm dashboard. It shows:
 
 ## Contract Addresses
 
+### EVM Contracts
+
 | Contract | Chain | Address | Explorer |
 |---|---|---|---|
-| `GhostEAMM.sol` | Ethereum Sepolia (11155111) | `0x7508D1e77A700EEf9d9b7cEc2Bf8d48c2F177F46` | [Etherscan](https://sepolia.etherscan.io/address/0x7508D1e77A700EEf9d9b7cEc2Bf8d48c2F177F46) |
-| `GhostVault.sol` | Flow EVM Testnet (545) | `0x377688cf84caaD124d5Ee99671323729D76C186f` | [Flowscan](https://evm-testnet.flowscan.io/address/0x377688cf84caaD124d5Ee99671323729D76C186f) |
-| `GhostMarket.sol` | Flow EVM Testnet (545) | `0x7D26f77c698C9277b9eBaB47E3b73CF08853d76a` | [Flowscan](https://evm-testnet.flowscan.io/address/0x7D26f77c698C9277b9eBaB47E3b73CF08853d76a) |
-| `OracleAgentRegistry.sol` | Filecoin Calibration (314159) | `0x268A2b5267f071F85ab44fEC76f512CB9Be4692f` | [Filfox](https://calibration.filfox.info/en/address/0x268A2b5267f071F85ab44fEC76f512CB9Be4692f) |
-| `GhostVaultResolverHandler` | Flow (Cadence) | `A.59403984ca469d1c.GhostVaultResolverHandler` | [Flowscan](https://testnet.flowscan.io/contract/A.59403984ca469d1c.GhostVaultResolverHandler) |
+| `GhostEAMM.sol` | Ethereum Sepolia (11155111) | [`0x7508D1e7...`](https://sepolia.etherscan.io/address/0x7508D1e77A700EEf9d9b7cEc2Bf8d48c2F177F46) | [Contract](https://sepolia.etherscan.io/address/0x7508D1e77A700EEf9d9b7cEc2Bf8d48c2F177F46) · [Txns](https://sepolia.etherscan.io/address/0x7508D1e77A700EEf9d9b7cEc2Bf8d48c2F177F46#transactions) · [Events](https://sepolia.etherscan.io/address/0x7508D1e77A700EEf9d9b7cEc2Bf8d48c2F177F46#events) |
+| `GhostVault.sol` | Flow EVM Testnet (545) | [`0x377688cf...`](https://evm-testnet.flowscan.io/address/0x377688cf84caaD124d5Ee99671323729D76C186f) | [Contract](https://evm-testnet.flowscan.io/address/0x377688cf84caaD124d5Ee99671323729D76C186f) · [Txns](https://evm-testnet.flowscan.io/address/0x377688cf84caaD124d5Ee99671323729D76C186f?tab=transactions) |
+| `GhostMarket.sol` | Flow EVM Testnet (545) | [`0x7D26f77c...`](https://evm-testnet.flowscan.io/address/0x7D26f77c698C9277b9eBaB47E3b73CF08853d76a) | [Contract](https://evm-testnet.flowscan.io/address/0x7D26f77c698C9277b9eBaB47E3b73CF08853d76a) · [Txns](https://evm-testnet.flowscan.io/address/0x7D26f77c698C9277b9eBaB47E3b73CF08853d76a?tab=transactions) |
+| `OracleAgentRegistry.sol` | Filecoin Calibration (314159) | [`0x268A2b52...`](https://calibration.filfox.info/en/address/0x268A2b5267f071F85ab44fEC76f512CB9Be4692f) | [Contract](https://calibration.filfox.info/en/address/0x268A2b5267f071F85ab44fEC76f512CB9Be4692f) · [Txns](https://calibration.filfox.info/en/address/0x268A2b5267f071F85ab44fEC76f512CB9Be4692f?t=transactions) |
+
+### Cadence Contract — Flow Native
+
+| Contract | Address | Links |
+|---|---|---|
+| `GhostVaultResolverHandler` | [`A.59403984ca469d1c.GhostVaultResolverHandler`](https://testnet.flowscan.io/contract/A.59403984ca469d1c.GhostVaultResolverHandler) | [Contract](https://testnet.flowscan.io/contract/A.59403984ca469d1c.GhostVaultResolverHandler) · [**Scheduled Deliveries →**](https://testnet.flowscan.io/contract/A.59403984ca469d1c.GhostVaultResolverHandler?tab=scheduled) · [Transactions](https://testnet.flowscan.io/contract/A.59403984ca469d1c.GhostVaultResolverHandler?tab=transactions) |
+
+> 29 market resolution deliveries are pre-committed to Flow's native transaction scheduler. At each market's expiry timestamp, `reportOutcome()` fires automatically — even if the oracle server is offline. [View all scheduled deliveries →](https://testnet.flowscan.io/contract/A.59403984ca469d1c.GhostVaultResolverHandler?tab=scheduled)
+
+### Zama / FHE Infrastructure (Sepolia)
+
+| Component | Address | Explorer |
+|---|---|---|
+| Zama ACL | `0xf0Ffdc93b7E186bC2f8CB3dAA75D86d1930A433D` | [Etherscan](https://sepolia.etherscan.io/address/0xf0Ffdc93b7E186bC2f8CB3dAA75D86d1930A433D) |
+| Zama KMS Verifier | `0xbE0E383937d564D7FF0BC3b46c51f0bF8d5C311A` | [Etherscan](https://sepolia.etherscan.io/address/0xbE0E383937d564D7FF0BC3b46c51f0bF8d5C311A) |
+| Zama Relayer | `https://relayer.testnet.zama.org` | — |
 
 ---
 
@@ -621,13 +641,22 @@ The Oracle Room (`/oracle`) is the live swarm dashboard. It shows:
 
 | Event | Chain | Transaction |
 |---|---|---|
-| Shielded bet (encrypted calldata) | Sepolia | [0x5994971938fcce4b...](https://sepolia.etherscan.io/tx/0x5994971938fcce4b63f3691218a62286963d57fe6b224e07879319691f6e9350) |
-| Market resolution — agent attestation | Calibration | [0xd02a46bac8a32d...](https://calibration.filfox.info/en/tx/0xd02a46bac8a32d0c406d7dde03398fdb5014134eb03712d22ff51bf185007e2a) |
-| Evidence CID recorded on Calibration | Calibration | [0x0c978a35a43a90...](https://calibration.filfox.info/en/tx/0x0c978a35a43a906577e676de61588184f0ccbfdad92ad29b3c8a602710218bd1) |
-| Cross-chain payout claimed | Flow EVM | [0x939fcc0a71544e...](https://evm-testnet.flowscan.io/tx/0x939fcc0a71544e8f7baf8b2d81f999bf847ad48c9b18e6fedc7fbfdb2b54654e) |
+| Shielded bet — encrypted calldata, no amount in events | Sepolia | [0x5994971938fcce4b...](https://sepolia.etherscan.io/tx/0x5994971938fcce4b63f3691218a62286963d57fe6b224e07879319691f6e9350) |
+| Market resolution — agent attestation (Calibration) | Filecoin | [0xd02a46bac8a32d...](https://calibration.filfox.info/en/tx/0xd02a46bac8a32d0c406d7dde03398fdb5014134eb03712d22ff51bf185007e2a) |
+| Evidence Piece CID recorded on Calibration | Filecoin | [0x0c978a35a43a90...](https://calibration.filfox.info/en/tx/0x0c978a35a43a906577e676de61588184f0ccbfdad92ad29b3c8a602710218bd1) |
+| Cross-chain payout claimed on Flow EVM | Flow EVM | [0x939fcc0a71544e...](https://evm-testnet.flowscan.io/tx/0x939fcc0a71544e8f7baf8b2d81f999bf847ad48c9b18e6fedc7fbfdb2b54654e) |
 
-**Evidence bundle on Filecoin:**
+**Evidence bundle on Filecoin (publicly retrievable, no API key):**
 [`bafkzcibdwmaqlzdqx7uf2anlz7gtjhu6adbbphy53aan5k7xjazretr4ss4iw5qj`](https://calib.ezpdpz.net/piece/bafkzcibdwmaqlzdqx7uf2anlz7gtjhu6adbbphy53aan5k7xjazretr4ss4iw5qj)
+
+**Agent metadata Piece CIDs (registered on Filecoin Calibration via Synapse):**
+
+| Agent | Name | Piece CID |
+|---|---|---|
+| 1 | Cipher | [`bafkzcibdx4bqkk...`](https://calib.ezpdpz.net/piece/bafkzcibdx4bqkkup35gmjzeu4l64e34rfkvtjuyyz2qdmhkm7d56zpjjfgdmplqi) |
+| 2 | Specter | [`bafkzcibdxqbqlk...`](https://calib.ezpdpz.net/piece/bafkzcibdxqbqlkfepyhnjwczkg2vpfgreibgnhjs2x6yjx5od7tbk2zth4b4murq) |
+| 3 | Wraith | [`bafkzcibdxubqlw...`](https://calib.ezpdpz.net/piece/bafkzcibdxubqlwxve74xhaibatzoopsrs7fbguilg6bkttbpl6qznvvkulnbhnjg) |
+| 4 | Phantom | [`bafkzcibdxubqki...`](https://calib.ezpdpz.net/piece/bafkzcibdxubqkih2auxj7qz76tecwngh2dzjzrpm3ydxfyirfssiulbkdez5s4zb) |
 
 ---
 
