@@ -1,5 +1,5 @@
 /**
- * eamm.ts — Phase 4: @zama-fhe/relayer-sdk client-side encryption + GhostEAMM helpers.
+ * eamm.ts — @zama-fhe/relayer-sdk client-side encryption + GhostEAMM helpers.
  *
  * Chain: Ethereum Sepolia (chain 11155111).
  * Zama Protocol runs ON Ethereum Sepolia — ZamaEthereumConfig wires
@@ -17,7 +17,6 @@ import {
   createPublicClient,
   createWalletClient,
   custom,
-  parseEther,
   http,
   type WalletClient,
 } from 'viem';
@@ -154,28 +153,29 @@ export interface EncryptedInput {
 }
 
 /**
- * Encrypt a bet amount (in wei) for submission to GhostEAMM.
+ * Encrypt a bet amount for submission to GhostEAMM.
  *
  * The resulting (handle, inputProof) pair is the FHE-encrypted representation
- * of `amountWei` bound to (contractAddress, userAddress).  No other party can
+ * of `amount` bound to (contractAddress, userAddress).  No other party can
  * read the plaintext from these bytes.
  *
- * @param provider        EIP-1193 provider from Privy (unused with relayer-sdk but kept for API compat).
+ * @param provider        EIP-1193 provider from Privy.
  * @param contractAddress GhostEAMM address on Sepolia.
  * @param userAddress     Caller's EVM address.
- * @param amountWei       Bet amount in wei (bigint).  Max ≈ 1.8 × 10^19.
+ * @param amount          Bet amount in USDC base units (6 decimals, bigint).
+ *                        e.g. parseUnits("10", 6) for a 10 USDC bet.
  */
 export async function encryptBetInput(
   provider:        unknown,
   contractAddress: `0x${string}`,
   userAddress:     `0x${string}`,
-  amountWei:       bigint,
+  amount:          bigint,
 ): Promise<EncryptedInput> {
   const instance = await initFhevm(provider);
 
   const buffer = instance.createEncryptedInput(contractAddress, userAddress);
   // add64 matches the euint64 type in the Solidity contract.
-  buffer.add64(amountWei);
+  buffer.add64(amount);
   const ciphertexts = await buffer.encrypt();
 
   // handles[0] and inputProof may be hex strings or Uint8Arrays depending on SDK version.
@@ -273,13 +273,6 @@ export function buildZamaWalletClient(provider: unknown): WalletClient {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     transport: custom(provider as any),
   });
-}
-
-// ─── Util: FLOW amount → wei bigint ──────────────────────────────────────────
-
-/** Convert a human-readable FLOW string (e.g. "1.5") to wei bigint. */
-export function toWei(flowAmount: string): bigint {
-  return parseEther(flowAmount);
 }
 
 /** True if the GhostEAMM address is configured in the environment. */

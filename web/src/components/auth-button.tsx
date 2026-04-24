@@ -9,7 +9,6 @@ function shortenAddr(addr: string, chars = 4): string {
   if (addr.startsWith('0x')) {
     return `${addr.slice(0, chars + 2)}…${addr.slice(-chars)}`;
   }
-  // Flow Cadence address (0x + 16 hex chars)
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
@@ -48,7 +47,7 @@ export function AuthButton() {
 
   const displayAddr = user.evmAddress ?? user.addr ?? '';
   const evmHref = user.evmAddress
-    ? `https://evm-testnet.flowscan.io/address/${user.evmAddress}`
+    ? `https://sepolia.etherscan.io/address/${user.evmAddress}`
     : undefined;
 
   function copyAddr() {
@@ -86,7 +85,7 @@ export function AuthButton() {
         <div className="absolute right-0 mt-2 w-64 rounded-xl border border-white/10 bg-slate-900/95 backdrop-blur-md shadow-2xl shadow-black/50 z-50 overflow-hidden">
           {/* Header */}
           <div className="px-4 pt-4 pb-3 border-b border-white/5">
-            <p className="text-xs text-slate-500 mb-1">Flow Testnet</p>
+            <p className="text-xs text-slate-500 mb-1">Ethereum Sepolia</p>
             <p className="text-sm font-mono text-slate-200 truncate">
               {displayAddr}
             </p>
@@ -112,7 +111,7 @@ export function AuthButton() {
                   className="w-4 h-4 text-slate-500"
                   strokeWidth={1.5}
                 />
-                View on Flowscan
+                View on Etherscan
               </a>
             )}
 

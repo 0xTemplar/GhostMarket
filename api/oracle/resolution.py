@@ -2,11 +2,11 @@
 Resolution session manager.
 
 Owns the state machine for a single market resolution run:
-  collecting → quorum_reached → uploading → finalized
+  collecting → quorum_reached → finalized
 
 Coordinates 7 agents concurrently, streams progress to WebSocket
-subscribers, and calls the TypeScript oracle service for chain
-interactions (Synapse uploads, OracleAgentRegistry, ERC-8004).
+subscribers, and proxies resolution to the TypeScript oracle service
+for Sepolia chain interactions (GhostEAMM.resolveMarket).
 """
 
 from __future__ import annotations
@@ -28,17 +28,14 @@ AgentStatus = str  # idle | fetching | attesting | submitted | slashed
 
 @dataclass
 class AgentState:
-    id:              int
-    name:            str
-    source:          str
-    reputation:      int  = 80
-    status:          AgentStatus = "idle"
-    vote:            bool | None = None
-    reasoning:       str  = ""
-    storacha_cid:    str | None = None
-    filecoin_cid:    str | None = None
-    attested_at:     int | None = None   # unix ms
-    erc8004_id:      int | None = None
+    id:          int
+    name:        str
+    source:      str
+    reputation:  int  = 80
+    status:      AgentStatus = "idle"
+    vote:        bool | None = None
+    reasoning:   str  = ""
+    attested_at: int | None = None   # unix ms
 
 
 @dataclass
@@ -63,16 +60,14 @@ class LogEntry:
 class ResolutionSession:
     market_id:          int
     market_question:    str
-    phase:              str = "pending"   # pending|collecting|quorum_reached|uploading|finalized|failed
-    agents:             list[AgentState] = field(default_factory=list)
-    yes_votes:          int = 0
-    no_votes:           int = 0
-    outcome:            bool | None = None
-    final_evidence_cid: str | None = None
-    calibration_tx:     str | None = None
-    flow_tx:            str | None = None
-    started_at:         int = field(default_factory=lambda: int(time.time() * 1000))
-    finalized_at:       int | None = None
+    phase:         str = "pending"   # pending|collecting|quorum_reached|finalized|failed
+    agents:        list[AgentState] = field(default_factory=list)
+    yes_votes:     int = 0
+    no_votes:      int = 0
+    outcome:       bool | None = None
+    sepolia_tx:    str | None = None   # GhostEAMM.resolveMarket tx hash
+    started_at:    int = field(default_factory=lambda: int(time.time() * 1000))
+    finalized_at:  int | None = None
     log:                list[LogEntry] = field(default_factory=list)
 
     # Registered WebSocket send callbacks
@@ -108,42 +103,36 @@ class ResolutionSession:
             "type":     "agent_update",
             "marketId": self.market_id,
             "payload": {
-                "id":          agent_state.id,
-                "name":        agent_state.name,
-                "source":      agent_state.source,
-                "reputation":  agent_state.reputation,
-                "status":      agent_state.status,
-                "vote":        agent_state.vote,
-                "reasoning":   agent_state.reasoning,
-                "storachaCid": agent_state.storacha_cid,
-                "filecoinCid": agent_state.filecoin_cid,
-                "attestedAt":  agent_state.attested_at,
+                "id":         agent_state.id,
+                "name":       agent_state.name,
+                "source":     agent_state.source,
+                "reputation": agent_state.reputation,
+                "status":     agent_state.status,
+                "vote":       agent_state.vote,
+                "reasoning":  agent_state.reasoning,
+                "attestedAt": agent_state.attested_at,
             },
         })
 
     def to_dict(self) -> dict:
         return {
-            "marketId":        self.market_id,
-            "marketQuestion":  self.market_question,
-            "phase":           self.phase,
-            "yesVotes":        self.yes_votes,
-            "noVotes":         self.no_votes,
-            "outcome":         self.outcome,
-            "finalEvidenceCid": self.final_evidence_cid,
-            "calibrationTx":  self.calibration_tx,
-            "flowTx":         self.flow_tx,
-            "startedAt":       self.started_at,
-            "finalizedAt":     self.finalized_at,
+            "marketId":       self.market_id,
+            "marketQuestion": self.market_question,
+            "phase":          self.phase,
+            "yesVotes":       self.yes_votes,
+            "noVotes":        self.no_votes,
+            "outcome":        self.outcome,
+            "sepoliaTxHash":  self.sepolia_tx,
+            "startedAt":      self.started_at,
+            "finalizedAt":    self.finalized_at,
             "agents": [{
-                "id":          a.id,
-                "name":        a.name,
-                "source":      a.source,
-                "reputation":  a.reputation,
-                "status":      a.status,
-                "vote":        a.vote,
-                "storachaCid": a.storacha_cid,
-                "filecoinCid": a.filecoin_cid,
-                "attestedAt":  a.attested_at,
+                "id":         a.id,
+                "name":       a.name,
+                "source":     a.source,
+                "reputation": a.reputation,
+                "status":     a.status,
+                "vote":       a.vote,
+                "attestedAt": a.attested_at,
             } for a in self.agents],
             "log": [e.to_dict() for e in self.log[-100:]],
         }
@@ -151,14 +140,14 @@ class ResolutionSession:
 
 # ── Oracle service proxy (calls TypeScript oracle/ service) ───────────────────
 
-ORACLE_SERVICE_URL = os.getenv("ORACLE_SERVICE_URL", "http://localhost:8092")
+ORACLE_SERVICE_URL = os.getenv("ORACLE_SERVICE_URL", "http://localhost:8080")
 ORACLE_SERVICE_TIMEOUT_SECONDS = float(os.getenv("ORACLE_SERVICE_TIMEOUT_SECONDS", "12"))
 ORACLE_SERVICE_RETRIES = int(os.getenv("ORACLE_SERVICE_RETRIES", "1"))
 
 async def _call_oracle_service(path: str, payload: dict | None = None) -> dict | None:
     """
     Call the TypeScript oracle service for chain interactions
-    (Synapse uploads, OracleAgentRegistry, Storacha, ERC-8004).
+    (GhostEAMM.resolveMarket on Sepolia, EIP-712 settlement signing).
     Returns None gracefully if the service is not running.
     """
     retries = max(1, ORACLE_SERVICE_RETRIES)

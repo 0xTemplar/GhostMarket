@@ -12,7 +12,6 @@ import {
   Ghost,
   Shield,
   Radar,
-  CalendarClock,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { AuthButton } from '@/components/auth-button';
@@ -99,17 +98,6 @@ export function Navbar() {
               /
             </span>
           </div>
-
-          <a
-            href="https://testnet.flowscan.io/contract/A.59403984ca469d1c.GhostVaultResolverHandler?tab=scheduled"
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Cadence Scheduled Deliveries"
-            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-emerald-400 border border-emerald-500/20 bg-emerald-500/8 hover:bg-emerald-500/15 hover:border-emerald-500/35 transition-all"
-          >
-            <CalendarClock className="w-3.5 h-3.5" strokeWidth={1.5} />
-            Scheduled
-          </a>
 
           <div className="h-6 w-px bg-white/10 mx-2 hidden sm:block" />
 

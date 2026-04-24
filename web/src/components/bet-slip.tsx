@@ -9,18 +9,22 @@ import type { Market } from '@/types/market';
 import { cn } from '@/lib/utils';
 import { useWallets } from '@privy-io/react-auth';
 import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
-import { placeBet } from '@/lib/flow/market';
 import { registerCanonicalBetTxHash } from '@/lib/oracle-client';
 import {
   encryptBetInput,
   placeEncryptedBet,
   buildZamaWalletClient,
   resetFhevmInstance,
-  toWei,
   isEammDeployed,
   GHOST_EAMM_ADDRESS,
-} from '@/lib/flow/eamm';
-import { lockBetCollateral, readLockedAmount, readFreeBalance, depositToVault } from '@/lib/flow/vault';
+} from '@/lib/eamm';
+import {
+  lockBetCollateral,
+  readLockedAmount,
+  readFreeBalance,
+  approveAndDeposit,
+  parseUsdc,
+} from '@/lib/vault';
 
 interface BetSlipProps {
   market: Market;
@@ -44,8 +48,6 @@ function isOnChainMarket(id: string): boolean {
   return /^\d+$/.test(id);
 }
 
-const FLOWSCAN_BASE  = 'https://evm-testnet.flowscan.io';
-// GhostEAMM runs on Ethereum Sepolia — link to Etherscan Sepolia
 const SEPOLIASCAN_BASE = 'https://sepolia.etherscan.io';
 const PROTOCOL_FEE_RATE = 0.02;
 const EFFECTIVE_CLOSE_PRICE = 0.999;
@@ -97,41 +99,43 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
   //   Layer 2 (Zama)     — encrypt the bet amount and submit to GhostEAMM so
   //                         position size is invisible to other participants.
   const handleShieldedSubmit = async () => {
-    const amountWei = toWei(amount);
+    const amountWei = parseUsdc(amount);
 
     // ── Layer 1: ensure vault balance, then lock collateral on Flow EVM ─────────
     // Step A: auto-deposit if the user's free vault balance < bet amount.
     // Step B: lock the collateral so it can't be withdrawn before settlement.
     // Skip if a lock already exists (retry path — previous attempt locked but Sepolia failed).
     try {
-      if (!walletClient) throw new Error('Flow EVM wallet not ready. Please wait and try again.');
+      if (!walletClient) throw new Error('Sepolia wallet not ready. Please wait and try again.');
 
       const userAddress = (user.evmAddress ?? '') as `0x${string}`;
-      const { publicClient: flowPublicClient } = await import('@/lib/flow/vault');
+      const { publicClient } = await import('@/lib/vault');
+      const marketIdBytes32 = ('0x' + BigInt(Number(market.id)).toString(16).padStart(64, '0')) as `0x${string}`;
 
       const alreadyLocked = userAddress
-        ? await readLockedAmount(userAddress, Number(market.id))
-        : '0';
+        ? await readLockedAmount(userAddress, marketIdBytes32)
+        : 0n;
 
-      if (parseFloat(alreadyLocked) === 0) {
+      if (alreadyLocked === 0n) {
         // ── Step A: deposit if vault free balance is insufficient ──────────────
-        const freeBalance = userAddress ? await readFreeBalance(userAddress) : '0';
-        const freeWei = BigInt(Math.floor(parseFloat(freeBalance) * 1e18));
+        const freeBalance = userAddress ? await readFreeBalance(userAddress) : 0n;
 
-        if (freeWei < amountWei) {
-          const shortfall = amountWei - freeWei;
+        if (freeBalance < amountWei) {
+          const shortfall = amountWei - freeBalance;
           setTxState({ phase: 'depositing' });
-          const depositHash = await depositToVault(walletClient, shortfall);
-          await flowPublicClient.waitForTransactionReceipt({ hash: depositHash });
+          // approveAndDeposit handles allowance check + approve tx + deposit tx
+          const hashes = await approveAndDeposit(walletClient, shortfall);
+          // last hash is the deposit; wait for it
+          await publicClient.waitForTransactionReceipt({ hash: hashes[hashes.length - 1] });
         }
 
         // ── Step B: lock the (now-funded) collateral ───────────────────────────
         setTxState({ phase: 'locking' });
-        const lockHash = await lockBetCollateral(walletClient, Number(market.id), amountWei, side === 'YES');
-        await flowPublicClient.waitForTransactionReceipt({ hash: lockHash });
+        const lockHash = await lockBetCollateral(walletClient, marketIdBytes32, amountWei, side === 'YES');
+        await publicClient.waitForTransactionReceipt({ hash: lockHash });
       } else {
         setTxState({ phase: 'locking' });
-        // If already locked: skip both steps and proceed to the Sepolia step.
+        // Already locked: skip deposit/lock, proceed to Sepolia EAMM bet.
       }
     } catch (err: unknown) {
       let message = 'Collateral lock failed.';
@@ -144,7 +148,7 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
           raw.includes('InsufficientBalance') ||
           raw.includes('0xcf479181')
         ) {
-          message = 'Insufficient FLOW in wallet. Add testnet FLOW from the faucet at faucet.flow.com.';
+          message = 'Insufficient USDC in vault. Deposit USDC from the Vault page first.';
         } else if (
           raw.includes('BetAlreadyLocked') ||
           raw.includes('0xac396183')
@@ -185,8 +189,7 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
 
       setTxState({ phase: 'pending', hash });
 
-      // Poll for confirmation on Sepolia.
-      const { zamaPublicClient } = await import('@/lib/flow/eamm');
+      const { zamaPublicClient } = await import('@/lib/eamm');
       await zamaPublicClient.waitForTransactionReceipt({ hash });
 
       // Non-blocking metadata write: gives oracle deterministic lookup for
@@ -216,7 +219,7 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
     }
   };
 
-  // ─── Public path (GhostMarket on Flow EVM) ─────────────────────────────────
+  // ─── Fallback: submit encrypted bet directly if vault/lock not configured ─────
   const handlePublicSubmit = async () => {
     if (!walletClient) {
       setTxState({ phase: 'error', message: 'Wallet not ready. Try again.' });
@@ -224,11 +227,11 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
     }
     setTxState({ phase: 'signing' });
     try {
-      const hash = await placeBet(walletClient, Number(market.id), side, amount);
-      setTxState({ phase: 'pending', hash });
-      const { publicClient } = await import('@/lib/flow/vault');
-      await publicClient.waitForTransactionReceipt({ hash });
-      setTxState({ phase: 'success', hash });
+      const { publicClient } = await import('@/lib/vault');
+      // In the simplified Sepolia-only architecture all bets go through GhostEAMM.
+      // The public (unencrypted) flow is not available; redirect to the shielded path.
+      void publicClient;
+      setTxState({ phase: 'error', message: 'All bets use the shielded (FHE) path. Please enable the shielded mode.' });
     } catch (err: unknown) {
       const message =
         err instanceof Error
@@ -256,8 +259,8 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
 
   const quickAmounts = [1, 5, 10, 25];
   const isBusy   = txState.phase === 'depositing' || txState.phase === 'locking' || txState.phase === 'encrypting' || txState.phase === 'signing' || txState.phase === 'pending';
-  const currency = onChain ? 'FLOW' : '$';
-  const scanBase = txState.phase === 'success' && txState.shielded ? SEPOLIASCAN_BASE : FLOWSCAN_BASE;
+  const currency = onChain ? 'USDC' : '$';
+  const scanBase = SEPOLIASCAN_BASE;
 
   return (
     <AnimatePresence>
@@ -323,8 +326,8 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                   <h3 className="text-lg font-bold text-white">Order Confirmed</h3>
                   <p className="mt-2 text-sm text-slate-400 max-w-xs">
                     {txState.phase === 'success' && txState.shielded
-                      ? `Collateral locked on Flow EVM · ${side} position encrypted on Zama fhevm. Position size is hidden from all participants.`
-                      : `Your ${side} position on this market has been recorded on Flow EVM.`}
+                      ? `USDC collateral locked on Sepolia · ${side} position encrypted on Zama fhevm. Position size is hidden from all participants.`
+                      : `Your ${side} position on this market has been recorded on Ethereum Sepolia.`}
                   </p>
                   {txState.hash && txState.hash !== '0xmock' && (
                     <a
@@ -494,7 +497,7 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                   {/* Pending tx banner */}
                   {txState.phase === 'pending' && (
                     <a
-                      href={`${shieldedMode && isEammDeployed() ? SEPOLIASCAN_BASE : FLOWSCAN_BASE}/tx/${txState.hash}`}
+                      href={`${SEPOLIASCAN_BASE}/tx/${txState.hash}`}
                       target="_blank"
                       rel="noreferrer"
                       className="flex items-center gap-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20 p-3"
@@ -541,9 +544,9 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                       <Shield className="h-4 w-4 text-indigo-400 mt-0.5 shrink-0" />
                       <p className="text-xs text-indigo-300 leading-relaxed">
                         {onChain && shieldedMode && isEammDeployed()
-                          ? 'Three-step: FLOW is deposited to vault (if needed), collateral is locked on Flow EVM, then amount is encrypted with FHE before submission. Position size is invisible to all other market participants.'
+                          ? 'Three-step: USDC is approved and deposited to vault (if needed), collateral is locked on Sepolia, then the amount is encrypted with FHE before submission. Position size is invisible to all other market participants.'
                           : onChain
-                          ? 'Executing on Flow EVM (public). Enable Shielded mode to lock collateral and hide your bet size.'
+                          ? 'Executing on Ethereum Sepolia (public). Enable Shielded mode to lock collateral and hide your bet size.'
                           : 'Shielded by default — order size and intent are encrypted before execution.'}
                       </p>
                     </div>
@@ -554,7 +557,7 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                     <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-3">
                       <Loader2 className="h-4 w-4 text-emerald-400 animate-spin shrink-0" />
                       <span className="text-xs text-emerald-300">
-                        Depositing FLOW into vault…
+                        Approving &amp; depositing USDC into vault…
                       </span>
                     </div>
                   )}
@@ -564,7 +567,7 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                     <div className="flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 p-3">
                       <Loader2 className="h-4 w-4 text-amber-400 animate-spin shrink-0" />
                       <span className="text-xs text-amber-300">
-                        Locking collateral on Flow EVM…
+                        Locking collateral on Ethereum Sepolia…
                       </span>
                     </div>
                   )}

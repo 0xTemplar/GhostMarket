@@ -1,39 +1,26 @@
 """
-Relayer router — gasless transaction proxy for Flow EVM.
+Relayer router — gas sponsorship proxy for Ethereum Sepolia.
 
-Gasless architecture (Flow-native, no meta-transactions needed):
-─────────────────────────────────────────────────────────────────
-Flow EVM's unique transaction model allows setting up a custom EVM Gateway
-with GAS_PRICE=0 and a funded Service Account. Every EVM transaction routed
-through that gateway is automatically sponsored — users sign normally but pay
-no gas.
+Architecture:
+  Users hold an embedded Privy wallet on Sepolia. They sign transactions
+  directly — there is no gasless gateway. This relayer provides two helpers:
 
-Reference:
-https://developers.flow.com/blockchain-development-tutorials/gasless-transactions/sponsored-transactions-evm-endpoint
+  POST /api/relayer/tx
+    Forward a pre-signed EVM transaction to the Sepolia RPC.
+    Useful for cases where the frontend cannot reach the RPC directly.
 
-This relayer provides two modes:
-
-  Mode A — Sponsored RPC proxy (production):
-    The signed EVM transaction from the user's FCL wallet is forwarded to a
-    custom EVM Gateway running with GAS_PRICE=0.  The gateway's Service
-    Account covers all Cadence transaction fees.  No contract changes needed;
-    deposit() works as-is.
-
-  Mode B — Backend EOA relay (development / fallback):
-    The backend holds a funded relayer wallet and calls depositFor(user)
-    directly, paying gas from its own balance.  Useful during development
-    before a sponsored gateway is deployed.
+  POST /api/relayer/deposit
+    Backend EOA calls GhostVault.depositFor(user) on behalf of a user,
+    paying Sepolia gas from the relayer wallet (dev/testing only).
 
 Environment variables:
-  FLOW_EVM_RPC                 Flow EVM RPC endpoint (default: testnet public node)
-  FLOW_EVM_SPONSORED_RPC       Custom sponsored gateway URL (Mode A)
-  RELAYER_PRIVATE_KEY          Backend relayer EOA private key (Mode B)
-  GHOST_VAULT_ADDRESS          Deployed GhostVault contract address
+  SEPOLIA_RPC_URL       Sepolia JSON-RPC endpoint (default: public)
+  RELAYER_PRIVATE_KEY   Backend relayer EOA private key (optional)
+  GHOST_VAULT_ADDRESS   Deployed GhostVault contract address
 """
 from __future__ import annotations
 
 import os
-from typing import Any
 
 import httpx
 from eth_account import Account
@@ -43,12 +30,10 @@ from web3 import Web3
 
 router = APIRouter()
 
-FLOW_EVM_RPC = os.getenv("FLOW_EVM_RPC", "https://testnet.evm.nodes.onflow.org")
-FLOW_EVM_SPONSORED_RPC = os.getenv("FLOW_EVM_SPONSORED_RPC", "")
+SEPOLIA_RPC_URL     = os.getenv("SEPOLIA_RPC_URL", "https://rpc.sepolia.org")
 RELAYER_PRIVATE_KEY = os.getenv("RELAYER_PRIVATE_KEY", "")
 GHOST_VAULT_ADDRESS = os.getenv("GHOST_VAULT_ADDRESS", "")
 
-# Minimal ABI — only the functions the relayer calls
 VAULT_ABI = [
     {
         "name": "depositFor",
@@ -60,87 +45,60 @@ VAULT_ABI = [
 ]
 
 
-# ─── Request / response models ──────────────────────────────────────────────
+# ─── Request / response models ────────────────────────────────────────────────
 
 class RawTxRequest(BaseModel):
-    """
-    Mode A: Forward a pre-signed EVM transaction to the sponsored gateway.
-    The frontend builds and signs the transaction using the FCL EVM provider,
-    then sends the raw hex here rather than directly to the public RPC.
-    """
     raw_tx: str  # hex-encoded signed transaction (0x-prefixed)
 
 
 class DepositRequest(BaseModel):
-    """
-    Mode B: Backend builds and submits the depositFor() call on behalf of
-    the user, paying gas from the relayer wallet.
-    """
-    user_address: str   # EVM address of the user (COA)
-    amount_flow: str    # Amount in FLOW as a decimal string, e.g. "1.5"
+    user_address: str   # EVM address of the user
+    amount_eth:   str   # Amount in ETH as a decimal string, e.g. "0.05"
 
 
 class RelayResponse(BaseModel):
     tx_hash: str
-    mode: str
+    mode:    str
 
 
-# ─── Mode A — Sponsored RPC proxy ────────────────────────────────────────────
+# ─── Forward raw TX ───────────────────────────────────────────────────────────
 
 @router.post("/tx", response_model=RelayResponse)
 async def relay_raw_tx(body: RawTxRequest) -> RelayResponse:
-    """
-    Forward a signed EVM transaction to the sponsored EVM gateway.
-    The gateway's Service Account (configured with COA_KEY + GAS_PRICE=0)
-    wraps it in a Cadence transaction and pays all fees.
-    """
-    target_rpc = FLOW_EVM_SPONSORED_RPC or FLOW_EVM_RPC
-
+    """Forward a pre-signed transaction to the Sepolia JSON-RPC node."""
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "eth_sendRawTransaction",
         "params": [body.raw_tx],
     }
-
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(target_rpc, json=payload)
+        resp = await client.post(SEPOLIA_RPC_URL, json=payload)
         resp.raise_for_status()
         result = resp.json()
 
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"].get("message", "RPC error"))
 
-    tx_hash: str = result.get("result", "")
-    return RelayResponse(tx_hash=tx_hash, mode="sponsored-rpc" if FLOW_EVM_SPONSORED_RPC else "public-rpc")
+    return RelayResponse(tx_hash=result.get("result", ""), mode="sepolia-rpc")
 
 
-# ─── Mode B — Backend EOA relay ──────────────────────────────────────────────
+# ─── Backend EOA deposit relay ────────────────────────────────────────────────
 
 @router.post("/deposit", response_model=RelayResponse)
 def relay_deposit(body: DepositRequest) -> RelayResponse:
-    """
-    Backend calls depositFor(user) on the vault, paying gas from the relayer
-    wallet.  Uses Mode B (backend EOA); suitable for development or as a
-    fallback before the sponsored gateway is live.
-    """
+    """Backend wallet calls depositFor(user) on GhostVault — dev/testing helper."""
     if not RELAYER_PRIVATE_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Relayer not configured. Set RELAYER_PRIVATE_KEY in the API environment, "
-                "or use the /api/relayer/tx endpoint with a sponsored RPC gateway."
-            ),
-        )
+        raise HTTPException(status_code=503, detail="RELAYER_PRIVATE_KEY not set.")
     if not GHOST_VAULT_ADDRESS:
-        raise HTTPException(status_code=503, detail="GHOST_VAULT_ADDRESS not set — deploy the contract first.")
+        raise HTTPException(status_code=503, detail="GHOST_VAULT_ADDRESS not set.")
 
     try:
-        amount_wei = Web3.to_wei(float(body.amount_flow), "ether")
+        amount_wei = Web3.to_wei(float(body.amount_eth), "ether")
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=f"Invalid amount: {exc}") from exc
 
-    w3 = Web3(Web3.HTTPProvider(FLOW_EVM_SPONSORED_RPC or FLOW_EVM_RPC))
+    w3 = Web3(Web3.HTTPProvider(SEPOLIA_RPC_URL))
     relayer = Account.from_key(RELAYER_PRIVATE_KEY)
     vault = w3.eth.contract(
         address=Web3.to_checksum_address(GHOST_VAULT_ADDRESS),
@@ -151,31 +109,13 @@ def relay_deposit(body: DepositRequest) -> RelayResponse:
     tx = vault.functions.depositFor(
         Web3.to_checksum_address(body.user_address)
     ).build_transaction({
-        "from": relayer.address,
-        "value": amount_wei,
-        "nonce": nonce,
-        "gas": 80_000,
+        "from":     relayer.address,
+        "value":    amount_wei,
+        "nonce":    nonce,
+        "gas":      80_000,
         "gasPrice": w3.eth.gas_price,
     })
 
-    signed = relayer.sign_transaction(tx)
+    signed  = relayer.sign_transaction(tx)
     tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-
     return RelayResponse(tx_hash=tx_hash.hex(), mode="backend-eoa")
-
-
-@router.post("/withdraw", response_model=RelayResponse)
-def relay_withdraw(body: DepositRequest) -> RelayResponse:
-    """
-    Stub — withdraw relay path mirrors deposit but calls withdraw().
-    In Phase 2 users can also call withdraw() directly via the FCL EVM
-    provider; this route is available for fully gasless flows.
-    """
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "Withdraw relay not yet implemented. "
-            "Use /api/relayer/tx to forward a pre-signed withdraw() call "
-            "through the sponsored RPC gateway instead."
-        ),
-    )

@@ -4,22 +4,17 @@ export type AgentStatus =
   | 'idle'
   | 'fetching'
   | 'attesting'
-  | 'submitted'
-  | 'slashed'
-  | 'suspended';
+  | 'submitted';
 
 export interface OracleAgent {
   id: number;           // 1–7
-  name: string;         // Ghost-01 … Ghost-07
+  name: string;
   source?: string;
   walletAddress: string;
   reputationScore: number;
-  erc8004Id: bigint | null;
   status: AgentStatus;
   vote: boolean | null;
   reasoning?: string;
-  storachaCid: string | null;   // intermediate evidence CID (Storacha)
-  filecoinCid: string | null;   // finalized evidence CID (Synapse/Filecoin)
   attestedAt: number | null;    // unix ms
 }
 
@@ -29,26 +24,18 @@ export type ResolutionPhase =
   | 'pending'
   | 'collecting'
   | 'quorum_reached'
-  | 'uploading'
   | 'finalized'
   | 'failed';
 
 export interface ResolutionSession {
   marketId: string;
-  marketTitle: string;   // e.g. "Will ETH trade above $6,500 before Jan 2027?"
+  marketTitle: string;
   phase: ResolutionPhase;
   agents: OracleAgent[];
   yesVotes: number;
   noVotes: number;
   outcome: boolean | null;
-  finalEvidenceCid: string | null;   // Synapse Piece CID
-  calibrationTxHash: string | null;
-  flowTxHash: string | null;
   sepoliaResolutionSync: {
-    status: 'idle' | 'pending' | 'synced' | 'failed' | 'skipped';
-    txHash: string | null;
-  };
-  flowResolutionSync: {
     status: 'idle' | 'pending' | 'synced' | 'failed' | 'skipped';
     txHash: string | null;
   };
@@ -70,7 +57,6 @@ export interface LogEntry {
   agentName: string | null;
   message: string;
   txHash: string | null;
-  cid: string | null;
 }
 
 // ── WebSocket message ──────────────────────────────────────────────────────────
@@ -95,15 +81,15 @@ export interface WsMessage {
 
 /** Response from POST /oracle/settle/:marketId */
 export interface SettlementClaimResponse {
-  marketId:      string;
-  userAddress:   string;
-  sig:           string;    // 65-byte ECDSA signature hex
-  payout:        string;    // net payout in wei (decimal string)
-  nonce:         string;    // replay-protection nonce
-  expiry:        string;    // unix seconds
-  marketIdBytes32: string;  // 0x-padded bytes32 for claimPayout()
-  vaultAddress:  string;
-  signerAddress: string;
-  signingPath:   'lit' | 'deployer';
-  deliveredTx:   string | null;   // Flow EVM tx if oracle auto-delivered
+  marketId:        string;
+  userAddress:     string;
+  sig:             string;    // 65-byte ECDSA signature hex
+  payout:          string;    // net payout in wei (decimal string)
+  nonce:           string;    // replay-protection nonce
+  expiry:          string;    // unix seconds
+  marketIdBytes32: string;    // 0x-padded bytes32 for claimPayout()
+  vaultAddress:    string;
+  signerAddress:   string;
+  signingPath:     'oracle';
+  deliveredTx:     string | null;
 }

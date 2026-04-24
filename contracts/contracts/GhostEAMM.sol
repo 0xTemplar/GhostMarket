@@ -12,15 +12,16 @@ import "@openzeppelin/contracts/utils/Pausable.sol";
  * @notice Encrypted Automated Market Maker for GhostMarket binary prediction markets.
  *
  * Deployment target: Ethereum Sepolia (via ZamaEthereumConfig).
- * The GhostEAMM is the confidential execution layer; it never receives plain
- * token amounts.  Only attested payout deltas cross to Flow EVM (Phase 6).
+ * The GhostEAMM is the confidential execution layer; it never receives or holds
+ * tokens.  Collateral custody lives in GhostVault (USDC, 6 decimals); bet amounts
+ * here are the matching USDC base-unit values encrypted client-side.
  *
  * Privacy model:
  *  - Bet amounts are encrypted client-side with fhevmjs before the tx is sent.
  *  - Pool totals are ciphertexts; they are never emitted or stored as plaintext.
  *  - Per-user position handles are ACL-scoped: only the position owner and this
- *    contract can gateway-decrypt them.  After resolution the resolver (or the
- *    Lit PKP in Phase 6) is also granted access via `grantPositionAccess`.
+ *    contract can gateway-decrypt them.  After resolution the oracle resolver is
+ *    also granted access via `grantPositionAccess`.
  *
  * ACL conventions (per Zama docs):
  *  - Call FHE.allowThis(ct) whenever a ciphertext is written to storage so the
@@ -65,18 +66,20 @@ contract GhostEAMM is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard, Pausabl
      * the pool and position receive an encrypted 0, leaving the user's
      * position handle uninitialized (i.e., no dust position is recorded).
      *
+     * Expressed in USDC base units (6 decimals): 1_000_000 = 1 USDC.
+     *
      * This demonstrates conditional encrypted logic — the plaintext amount
      * is never revealed to enforce this rule; all branching happens inside
      * the FHE coprocessor.
      */
-    uint64 public constant MIN_BET_WEI = 1_000_000_000; // 1 gwei
+    uint64 public constant MIN_BET_UNITS = 1_000_000; // 1 USDC (6 decimals)
 
     // ─── Access control ───────────────────────────────────────────────────────
 
-    /// @notice Can create markets (mirrors GhostMarket.sol owner for testnet).
+    /// @notice Can create markets (mirrors GhostMarket.sol owner).
     address public marketManager;
 
-    /// @notice Can resolve/cancel markets (becomes oracle multi-sig in Phase 5).
+    /// @notice Can resolve/cancel markets — the oracle wallet on Sepolia.
     address public resolver;
 
     // ─── Events ───────────────────────────────────────────────────────────────
@@ -165,7 +168,7 @@ contract GhostEAMM is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard, Pausabl
      * The caller encrypts their amount client-side with fhevmjs:
      *
      *   const input = instance.createEncryptedInput(EAMM_ADDRESS, userAddress);
-     *   input.add64(amountWei);
+     *   input.add64(amountInUsdcBaseUnits); // e.g. parseUnits("10", 6) for 10 USDC
      *   const { handles, inputProof } = await input.encrypt();
      *
      * The (handle, inputProof) pair is passed here.  The contract adds the
@@ -202,7 +205,7 @@ contract GhostEAMM is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard, Pausabl
         // All branching happens inside the Zama FHE coprocessor:
         //   aboveMin      = encrypt(amount > MIN_BET_WEI)   ← encrypted bool
         //   effectiveAmount = aboveMin ? amount : encrypt(0) ← encrypted select
-        euint64 minBet  = FHE.asEuint64(MIN_BET_WEI);
+        euint64 minBet  = FHE.asEuint64(MIN_BET_UNITS);
         euint64 zeroAmt = FHE.asEuint64(0);
         FHE.allowThis(minBet);
         FHE.allowThis(zeroAmt);
@@ -248,11 +251,11 @@ contract GhostEAMM is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard, Pausabl
     /**
      * @notice Finalise a market outcome.
      *
-     * After Phase 5 this will be called by the oracle quorum contract rather
-     * than a single resolver EOA.
+     * Called by the oracle resolver EOA after the oracle agent quorum agrees
+     * on the real-world result.
      *
-     * Grants the resolver ACL access to both pool totals so it (or the Lit PKP
-     * in Phase 6) can gateway-decrypt them for payout ratio computation.
+     * Grants the resolver ACL access to both pool totals so it can
+     * gateway-decrypt them via the Zama gateway for payout ratio computation.
      *
      * @param marketId  Market to resolve.
      * @param outcome   true = YES won, false = NO won.
@@ -279,7 +282,8 @@ contract GhostEAMM is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard, Pausabl
      * @notice Cancel a market (data unavailable, admin decision, etc.).
      *
      * On cancel the resolver should call `grantPositionAccess` for each user
-     * to allow refund computation in Phase 6.
+     * so the oracle can gateway-decrypt their positions and issue USDC refunds
+     * via signed GhostVault settlement messages.
      */
     function cancelMarket(uint256 marketId) external onlyResolverOrOwner {
         EncryptedMarket storage m = _markets[marketId];
@@ -295,22 +299,22 @@ contract GhostEAMM is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard, Pausabl
         emit MarketCancelled(marketId);
     }
 
-    // ─── Phase 6 ACL hook ─────────────────────────────────────────────────────
+    // ─── Oracle ACL hook ──────────────────────────────────────────────────────
 
     /**
-     * @notice Grant a decryptor (Lit PKP or Phase 6 relayer) ACL access to a
-     *         user's winning position handle and both pool totals.
+     * @notice Grant a decryptor (oracle wallet) ACL access to a user's
+     *         winning position handle and both pool totals.
      *
-     * The Lit Action needs:
+     * The oracle needs:
      *  - the user's winning position handle (to compute their share)
      *  - both pool totals (to compute the payout ratio)
      *
      * For cancelled markets, both YES and NO positions are granted so the
-     * relayer can compute full refunds.
+     * oracle can compute full USDC refunds and issue signed settlement claims.
      *
      * @param marketId   Resolved or cancelled market.
      * @param user       Position owner.
-     * @param decryptor  Address (Lit PKP) that will gateway-decrypt the handles.
+     * @param decryptor  Oracle address that will gateway-decrypt the handles.
      */
     function grantPositionAccess(
         uint256 marketId,

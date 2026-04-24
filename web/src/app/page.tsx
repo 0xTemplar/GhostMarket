@@ -12,10 +12,9 @@ import { mockMarkets } from '@/data/markets';
 import type { Market } from '@/types/market';
 import {
   readAllMarkets,
-  toFrontendMarket,
   isMarketDeployed,
-} from '@/lib/flow/market';
-import { isEammDeployed, readEammMarketMeta } from '@/lib/flow/eamm';
+} from '@/lib/market';
+import { isEammDeployed, readEammMarketMeta } from '@/lib/eamm';
 
 // ─── Data loading ─────────────────────────────────────────────────────────────
 
@@ -31,25 +30,34 @@ function useMarkets() {
     }
     try {
       const raw = await readAllMarkets();
-      // Home feed only shows markets that are open on Flow AND not finalized on Sepolia eAMM.
-      const flowOpen = raw.filter((m) => m.status === 0);
-      const crossChainOpen = isEammDeployed()
+      // Filter to active markets (status 0 = Active in GhostMarket.sol).
+      const activeMarkets = raw.filter((m) => m.status === 0);
+
+      // Optionally filter by EAMM status (hides markets resolved in the FHE AMM).
+      const keep = isEammDeployed()
         ? (await Promise.all(
-            flowOpen.map(async (m) => {
+            activeMarkets.map(async (m) => {
               try {
                 const eammMeta = await readEammMarketMeta(m.id);
-                // eAMM status: 0 Active | 1 Resolved | 2 Cancelled
-                return eammMeta.status === 0;
+                return eammMeta.status === 0; // 0 = Active
               } catch {
-                // If eAMM lookup fails (market not mirrored / rpc hiccup), keep market visible.
                 return true;
               }
             }),
           ))
-        : flowOpen.map(() => true);
+        : activeMarkets.map(() => true);
 
-      const openMarkets = flowOpen.filter((_, i) => crossChainOpen[i]);
-      setOnChain(openMarkets.map(toFrontendMarket).filter((m) => m.status === 'active'));
+      const openMarkets = activeMarkets.filter((_, i) => keep[i]);
+      setOnChain(openMarkets.map((m) => ({
+        id:          m.id,
+        title:       m.title,
+        description: m.description,
+        category:    m.category,
+        status:      'active' as const,
+        endDate:     new Date(m.expiryAt * 1000).toISOString(),
+        yesPrice:    m.yesPrice ?? 50,
+        noPrice:     m.noPrice ?? 50,
+      })));
     } catch {
       // silently fall back to mock data
     } finally {

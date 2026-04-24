@@ -10,19 +10,19 @@ import {
 import { PortfolioPositionRow } from '@/components/portfolio-position-row';
 import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
 import {
-  readAllMarkets, readUserPosition, isMarketDeployed,
-  type OnChainMarket,
-} from '@/lib/flow/market';
+  readAllMarkets, isMarketDeployed,
+  type FrontendMarket,
+} from '@/lib/market';
 import {
   readEammMarketMeta, readEammPositionHandles, isEammDeployed,
   type EammMarketMeta, type PositionHandles,
-} from '@/lib/flow/eamm';
+} from '@/lib/eamm';
 import {
   readLockedAmount,
   claimVaultPayout,
-  eammMarketIdToBytes32,
   readSettlementSigner,
-} from '@/lib/flow/vault';
+  publicClient,
+} from '@/lib/vault';
 import { formatTimeRemaining, cn } from '@/lib/utils';
 import { requestSettlement, type SettlementClaim } from '@/lib/oracle-client';
 
@@ -59,12 +59,12 @@ interface ClaimState {
 // ─── On-chain position type ───────────────────────────────────────────────────
 
 interface OnChainPosition {
-  market: OnChainMarket;
-  yesFlow: number;   // FLOW staked on YES
-  noFlow: number;    // FLOW staked on NO
+  market: FrontendMarket;
+  yesEth: number;
+  noEth: number;
   claimed: boolean;
   dominantSide: 'YES' | 'NO' | 'BOTH';
-  currentYesPricePct: number; // 0–100
+  currentYesPricePct: number;
 }
 
 const STATUS_LABEL: Record<number, string> = {
@@ -108,7 +108,7 @@ function ShieldedPositionRow({
   const resolved  = pos.meta.status === 1;
   const hasLocked = parseFloat(pos.lockedCollateral) > 0;
 
-  const FLOWSCAN = 'https://evm-testnet.flowscan.io/tx/';
+  const ETHERSCAN = 'https://sepolia.etherscan.io/tx/';
 
   return (
     <motion.div
@@ -243,7 +243,7 @@ function ShieldedPositionRow({
           <CheckCircle2 className="h-3 w-3 shrink-0" />
           Payout claimed.{' '}
           <a
-            href={`${FLOWSCAN}${claimState.txHash}`}
+            href={`${ETHERSCAN}${claimState.txHash}`}
             target="_blank"
             rel="noopener noreferrer"
             className="underline underline-offset-2 hover:text-emerald-300 transition-colors"
@@ -394,30 +394,27 @@ export default function PortfolioPage() {
 
       await Promise.all(
         markets.map(async (market) => {
-          const pos = await readUserPosition(
-            market.id,
+          // For simplified Sepolia architecture, positions are tracked via
+          // EAMM position handles (FHE-encrypted). We show markets where
+          // the user has locked collateral.
+          const marketIdBytes32 = ('0x' + BigInt(market.id).toString(16).padStart(64, '0')) as `0x${string}`;
+          const locked = await readLockedAmount(
             user.evmAddress as `0x${string}`,
-          );
-          if (!pos || (pos.yesAmount === 0n && pos.noAmount === 0n)) return;
-          // Closed position: resolved + already claimed.
-          if (market.status === 1 && pos.claimed) return;
+            marketIdBytes32,
+          ).catch(() => 0n);
+          if (locked === 0n) return;
 
-          const yesFlow = Number(pos.yesAmount) / 1e18;
-          const noFlow  = Number(pos.noAmount)  / 1e18;
-          const dominantSide: OnChainPosition['dominantSide'] =
-            yesFlow > 0 && noFlow > 0
-              ? 'BOTH'
-              : yesFlow > 0
-              ? 'YES'
-              : 'NO';
+          const yesEth = Number(locked) / 1e18;
+          const noEth  = 0;
+          const dominantSide: OnChainPosition['dominantSide'] = 'YES';
 
           results.push({
             market,
-            yesFlow,
-            noFlow,
-            claimed: pos.claimed,
+            yesEth,
+            noEth,
+            claimed:            false,
             dominantSide,
-            currentYesPricePct: Math.round(market.yesPriceBps / 100),
+            currentYesPricePct: market.yesPrice ?? 50,
           });
         }),
       );
@@ -540,19 +537,19 @@ export default function PortfolioPage() {
 
       setPhase({ phase: 'submitting' });
 
-      // Submit claimPayout() to GhostVault on Flow EVM
+      // Submit claimPayout() to GhostVault on Sepolia
+      const marketIdBytes32 = ('0x' + BigInt(marketId).toString(16).padStart(64, '0')) as `0x${string}`;
       const txHash = await claimVaultPayout(
         walletClient,
-        eammMarketIdToBytes32(marketId),
-        claim.payout,
-        claim.nonce,
-        claim.expiry,
-        claim.sig,
+        marketIdBytes32,
+        BigInt(claim.payout),
+        BigInt(claim.nonce),
+        BigInt(claim.expiry),
+        claim.sig as `0x${string}`,
       );
 
-      const payoutFlow = (Number(BigInt(claim.payout)) / 1e18).toFixed(4);
-
-      setPhase({ phase: 'success', txHash, payout: payoutFlow });
+      const payoutEth = (Number(BigInt(claim.payout)) / 1e18).toFixed(4);
+      setPhase({ phase: 'success', txHash, payout: payoutEth });
       // Refresh lists so claimed/closed positions disappear from the open view.
       await Promise.all([fetchShieldedPositions(), fetchOnChainPositions()]);
     } catch (err) {

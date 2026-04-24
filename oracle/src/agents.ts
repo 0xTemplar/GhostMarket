@@ -77,12 +77,9 @@ export function buildAgents(addresses: string[]): OracleAgent[] {
     source: def.source,
     walletAddress: addresses[i] ?? '0x0000000000000000000000000000000000000000',
     reputationScore: 80,
-    erc8004Id: null,
     status: 'idle',
     vote: null,
     reasoning: '',
-    storachaCid: null,
-    filecoinCid: null,
     attestedAt: null,
   }));
 }

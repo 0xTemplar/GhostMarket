@@ -18,17 +18,15 @@ import {
   formatPercent, cn,
 } from '@/lib/utils';
 import {
-  readMarket, toFrontendMarket, type OnChainMarket,
-  claimWinnings, claimRefund, readUserPosition, readIsRefundEligible,
-} from '@/lib/flow/market';
+  readMarket, type FrontendMarket,
+} from '@/lib/market';
 import {
   readEammPositionHandles, readEammMarketMeta, isEammDeployed,
-} from '@/lib/flow/eamm';
+} from '@/lib/eamm';
 import {
   readLockedAmount, readComputedPayout, readIsMarketResolved,
-  GHOST_VAULT_ADDRESS, GHOST_VAULT_ABI, publicClient as flowPublicClient,
-  parseEther,
-} from '@/lib/flow/vault';
+  GHOST_VAULT_ADDRESS, publicClient,
+} from '@/lib/vault';
 import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -45,7 +43,7 @@ type ActivityItem = {
   minsAgo: number;
 };
 
-const FLOWSCAN = 'https://evm-testnet.flowscan.io';
+const ETHERSCAN = 'https://sepolia.etherscan.io';
 
 function buildRecentActivity(market: Market): ActivityItem[] {
   const yesPct = Math.round(market.yesPrice * 100);
@@ -77,18 +75,16 @@ function OnChainActions({
   raw,
 }: {
   market: Market;
-  raw: OnChainMarket;
+  raw: FrontendMarket;
 }) {
   const { user } = useFlowAuth();
   const walletClient = useFlowWalletClient();
   const [posLoading, setPosLoading] = useState(false);
-  const [userPos, setUserPos] = useState<{ yes: string; no: string; claimed: boolean } | null>(null);
-  const [refundEligible, setRefundEligible] = useState(false);
   const [shieldedPos, setShieldedPos] = useState<{
     hasYes: boolean; hasNo: boolean;
     locked: string; side: string;
-    computedPayout: string;   // on-chain Option B payout (0 = loser or unresolved)
-    vaultResolved: boolean;   // true if oracle has reported outcome to GhostVault
+    computedPayout: string;
+    vaultResolved: boolean;
   } | null>(null);
   const [actionState, setActionState] = useState<
     | { phase: 'idle' }
@@ -96,7 +92,6 @@ function OnChainActions({
     | { phase: 'success'; hash: string; label?: string }
     | { phase: 'error'; msg: string }
   >({ phase: 'idle' });
-  const legacyPublicEnabled = !isEammDeployed();
 
   const loadPosition = useCallback(async () => {
     if (!user.evmAddress) return;
@@ -105,45 +100,35 @@ function OnChainActions({
       const addr = user.evmAddress as `0x${string}`;
       const zero = '0x' + '0'.repeat(64);
 
-      const [pos, eligible, handles, locked, computedPayout, vaultResolved] = await Promise.all([
-        legacyPublicEnabled ? readUserPosition(raw.id, addr) : Promise.resolve(null),
-        legacyPublicEnabled ? readIsRefundEligible(raw.id) : Promise.resolve(false),
+      const [handles, locked, computedPayout, vaultResolved] = await Promise.all([
         isEammDeployed()
           ? readEammPositionHandles(raw.id, addr).catch(() => null)
           : Promise.resolve(null),
-        isEammDeployed() ? readLockedAmount(addr, raw.id)         : Promise.resolve('0'),
-        isEammDeployed() ? readComputedPayout(addr, raw.id)       : Promise.resolve('0'),
-        isEammDeployed() ? readIsMarketResolved(raw.id)           : Promise.resolve(false),
+        isEammDeployed() ? readLockedAmount(addr, ('0x' + BigInt(raw.id).toString(16).padStart(64, '0')) as `0x${string}`) : Promise.resolve(0n),
+        isEammDeployed() ? readComputedPayout(addr, ('0x' + BigInt(raw.id).toString(16).padStart(64, '0')) as `0x${string}`) : Promise.resolve(0n),
+        isEammDeployed() ? readIsMarketResolved(('0x' + BigInt(raw.id).toString(16).padStart(64, '0')) as `0x${string}`) : Promise.resolve(false),
       ]);
-
-      if (pos && legacyPublicEnabled) {
-        setUserPos({
-          yes: pos.yesAmount > 0n ? `YES: ${(Number(pos.yesAmount) / 1e18).toFixed(4)} FLOW` : '',
-          no:  pos.noAmount  > 0n ? `NO: ${(Number(pos.noAmount)  / 1e18).toFixed(4)} FLOW` : '',
-          claimed: pos.claimed,
-        });
-      }
 
       if (handles) {
         const hasYes = handles.yesHandle !== zero;
         const hasNo  = handles.noHandle  !== zero;
+        const lockedStr = (Number(locked) / 1e18).toFixed(4);
+        const payoutStr = (Number(computedPayout) / 1e18).toFixed(4);
         if (hasYes || hasNo) {
           const side = hasYes && hasNo ? 'YES + NO' : hasYes ? 'YES' : 'NO';
-          setShieldedPos({ hasYes, hasNo, locked, side, computedPayout, vaultResolved });
-        } else if (parseFloat(locked) > 0) {
-          // Lock exists but no EAMM handle — position pending Sepolia confirmation
+          setShieldedPos({ hasYes, hasNo, locked: lockedStr, side, computedPayout: payoutStr, vaultResolved });
+        } else if (Number(locked) > 0) {
           setShieldedPos({
-            hasYes: false, hasNo: false, locked, side: '?',
-            computedPayout, vaultResolved,
+            hasYes: false, hasNo: false, locked: lockedStr, side: '?',
+            computedPayout: payoutStr, vaultResolved,
           });
         }
       }
 
-      setRefundEligible(legacyPublicEnabled ? eligible : false);
     } finally {
       setPosLoading(false);
     }
-  }, [user.evmAddress, raw.id, legacyPublicEnabled]);
+  }, [user.evmAddress, raw.id]);
 
   // Initial load + auto-refresh every 15s so settled positions surface without a manual refresh
   useEffect(() => {
@@ -152,38 +137,21 @@ function OnChainActions({
     return () => clearInterval(interval);
   }, [loadPosition]);
 
-  const handleClaim = async () => {
-    if (!walletClient) return;
-    setActionState({ phase: 'loading' });
-    try {
-      const hash =
-        raw.status === 1
-          ? await claimWinnings(walletClient, raw.id)
-          : await claimRefund(walletClient, raw.id);
-      await flowPublicClient.waitForTransactionReceipt({ hash });
-      setActionState({ phase: 'success', hash, label: 'Claimed' });
-      await loadPosition();
-    } catch (err: unknown) {
-      const msg = err instanceof Error
-        ? err.message.includes('User rejected') ? 'Rejected.' : err.message.slice(0, 120)
-        : 'Failed.';
-      setActionState({ phase: 'error', msg });
-    }
-  };
-
-  const handleWithdraw = async (amountEther: string) => {
+  const handleWithdraw = async (amountUsdc: string) => {
     if (!walletClient || !user.evmAddress) return;
     setActionState({ phase: 'loading' });
     try {
+      const { parseUnits } = await import('viem');
+      const { GHOST_VAULT_ABI } = await import('@/lib/vault');
       const hash = await walletClient.writeContract({
         address:      GHOST_VAULT_ADDRESS,
         abi:          GHOST_VAULT_ABI,
         functionName: 'withdraw',
-        args:         [parseEther(amountEther)],
+        args:         [parseUnits(amountUsdc, 6)],
         account:      user.evmAddress as `0x${string}`,
         chain:        undefined,
       });
-      await flowPublicClient.waitForTransactionReceipt({ hash });
+      await publicClient.waitForTransactionReceipt({ hash });
       setActionState({ phase: 'success', hash, label: 'Withdrawn to wallet' });
       await loadPosition();
     } catch (err: unknown) {
@@ -338,7 +306,7 @@ function OnChainActions({
           <div className="space-y-2">
             <p className="text-sm text-emerald-400">✓ {actionState.label ?? 'Done'}</p>
             <a
-              href={`${FLOWSCAN}/tx/${actionState.hash}`}
+              href={`${ETHERSCAN}/tx/${actionState.hash}`}
               target="_blank" rel="noreferrer"
               className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
             >
@@ -396,7 +364,7 @@ export default function MarketDetailPage() {
   const { openBetSlip } = useBetSlip();
 
   const [market,    setMarket]    = useState<Market | null>(null);
-  const [rawMarket, setRawMarket] = useState<OnChainMarket | null>(null);
+  const [rawMarket, setRawMarket] = useState<FrontendMarket | null>(null);
   const [eammMeta, setEammMeta]   = useState<{ status: number; outcome: boolean; expiryAt: number } | null>(null);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState<string | null>(null);
@@ -421,7 +389,7 @@ export default function MarketDetailPage() {
           } else {
             setRawMarket(raw);
             setEammMeta(meta);
-            setMarket(toFrontendMarket(raw));
+            setMarket({ id: raw.id, title: raw.title, description: raw.description, category: raw.category, status: raw.status === 0 ? 'active' : raw.status === 1 ? 'resolved' : 'cancelled', endDate: new Date(raw.expiryAt * 1000).toISOString(), yesPrice: raw.yesPrice ?? 0.5, noPrice: raw.noPrice ?? 0.5 });
           }
         } catch {
           if (!cancelled) setError('Failed to load market data.');
@@ -672,7 +640,7 @@ export default function MarketDetailPage() {
                   </span>
                   <span className="text-sm font-medium text-white">
                     {rawMarket
-                      ? `${(Number(rawMarket.yesPool + rawMarket.noPool) / 1e18).toFixed(4)} FLOW`
+                      ? `— USDC (FHE-encrypted)`
                       : formatVolume(market.volume)
                     }
                   </span>
@@ -681,22 +649,21 @@ export default function MarketDetailPage() {
                   <div className="flex items-start justify-between py-2 border-b border-white/5">
                     <span className="text-sm text-slate-500 flex items-center gap-2">
                       <Droplets className="h-3.5 w-3.5" />
-                      YES / NO Pool
+                      Pool
                     </span>
                     <span className="text-sm font-medium text-white font-mono">
-                      {(Number(rawMarket.yesPool) / 1e18).toFixed(4)} /&nbsp;
-                      {(Number(rawMarket.noPool)  / 1e18).toFixed(4)} FLOW
+                      FHE-encrypted
                     </span>
                   </div>
                 )}
-                {rawMarket && (
+                {rawMarket?.creator && (
                   <div className="flex items-start justify-between py-2">
                     <span className="text-sm text-slate-500 flex items-center gap-2">
                       <Users className="h-3.5 w-3.5" />
                       Creator
                     </span>
                     <a
-                      href={`${FLOWSCAN}/address/${rawMarket.creator}`}
+                      href={`${ETHERSCAN}/address/${rawMarket.creator}`}
                       target="_blank"
                       rel="noreferrer"
                       className="text-sm font-medium text-indigo-400 hover:text-indigo-300 font-mono transition-colors"
