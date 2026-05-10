@@ -140,7 +140,7 @@ export function HeroSection() {
                 >
                   <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-white/10 text-indigo-200 border border-white/15 backdrop-blur-sm">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    Live on Flow EVM · FHE-Encrypted Execution
+                    Live on Ethereum Sepolia · FHE-Encrypted Execution
                   </span>
                 </motion.div> */}
 

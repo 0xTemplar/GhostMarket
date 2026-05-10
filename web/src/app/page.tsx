@@ -49,14 +49,23 @@ function useMarkets() {
 
       const openMarkets = activeMarkets.filter((_, i) => keep[i]);
       setOnChain(openMarkets.map((m) => ({
-        id:          m.id,
-        title:       m.title,
-        description: m.description,
-        category:    m.category,
-        status:      'active' as const,
-        endDate:     new Date(m.expiryAt * 1000).toISOString(),
-        yesPrice:    m.yesPrice ?? 50,
-        noPrice:     m.noPrice ?? 50,
+        id:               String(m.id),
+        title:            m.title,
+        description:      m.description,
+        category:         m.category as Market['category'],
+        resolutionSource: m.resolutionSource ?? '',
+        status:           'active' as const,
+        expiryAt:         new Date(m.expiryAt * 1000).toISOString(),
+        createdAt:        new Date().toISOString(),
+        yesPrice:         m.yesPrice ?? 0.5,
+        noPrice:          m.noPrice ?? 0.5,
+        // FHE pools are encrypted — these metrics are unavailable on-chain.
+        volume:       0,
+        liquidity:    0,
+        tradersCount: 0,
+        priceHistory: [],
+        change24h:    0,
+        trending:     false,
       })));
     } catch {
       // silently fall back to mock data
@@ -72,18 +81,14 @@ function useMarkets() {
 
   /**
    * Merge strategy:
-   *  - On-chain markets are shown first (real data, live prices).
-   *  - Mock markets that share a title with an on-chain market are suppressed.
-   *  - Remaining mock markets fill the listing so it never looks empty during
-   *    testnet when only a few on-chain markets exist.
+   *  - Once any on-chain market is loaded, show ONLY on-chain markets.
+   *  - Mock markets are shown only while the chain hasn't returned data yet
+   *    (pre-hydration or when the contract address isn't configured).
    */
   const markets: Market[] = useMemo(() => {
     if (!hydrated) return mockMarkets.filter((m) => m.status === 'active');
-
-    const onChainTitles = new Set(onChain.map((m) => m.title));
-    const filteredMock  = mockMarkets.filter((m) => m.status === 'active' && !onChainTitles.has(m.title));
-
-    return [...onChain, ...filteredMock];
+    if (onChain.length > 0) return onChain;
+    return mockMarkets.filter((m) => m.status === 'active');
   }, [onChain, hydrated]);
 
   return { markets, loading, onChainCount: onChain.length };

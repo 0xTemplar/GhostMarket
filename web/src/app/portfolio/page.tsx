@@ -22,6 +22,7 @@ import {
   claimVaultPayout,
   readSettlementSigner,
   publicClient,
+  formatUsdc,
 } from '@/lib/vault';
 import { formatTimeRemaining, cn } from '@/lib/utils';
 import { requestSettlement, type SettlementClaim } from '@/lib/oracle-client';
@@ -34,9 +35,9 @@ interface ShieldedPosition {
   yesHandle:     `0x${string}`; // opaque — encrypted by fhevm
   noHandle:      `0x${string}`; // opaque — encrypted by fhevm
   meta:          EammMarketMeta;
-  lockedCollateral: string;     // FLOW locked in GhostVault for this market
+  lockedCollateral: string;     // USDC locked in GhostVault for this market (formatted)
   revealed:      boolean;       // true after user-authorised gateway decryption
-  revealedYes:   string | null; // plaintext FLOW after reveal
+  revealedYes:   string | null; // plaintext bet size after reveal
   revealedNo:    string | null;
 }
 
@@ -45,14 +46,14 @@ interface ShieldedPosition {
 type ClaimPhase =
   | 'idle'
   | 'requesting'    // fetching settlement sig from oracle
-  | 'submitting'    // submitting claimPayout() tx on Flow EVM
+  | 'submitting'    // submitting claimPayout() tx on Ethereum Sepolia
   | 'success'
   | 'error';
 
 interface ClaimState {
   phase:   ClaimPhase;
   txHash:  string | null;
-  payout:  string | null;   // formatted FLOW
+  payout:  string | null;   // formatted USDC
   error:   string | null;
 }
 
@@ -60,8 +61,8 @@ interface ClaimState {
 
 interface OnChainPosition {
   market: FrontendMarket;
-  yesEth: number;
-  noEth: number;
+  yesUsdc: number;
+  noUsdc: number;
   claimed: boolean;
   dominantSide: 'YES' | 'NO' | 'BOTH';
   currentYesPricePct: number;
@@ -160,7 +161,7 @@ function ShieldedPositionRow({
             <div>
               <div className="text-xs text-slate-500 mb-0.5">Collateral</div>
               <div className="font-mono text-sm font-semibold text-amber-400">
-                {parseFloat(pos.lockedCollateral).toFixed(4)} FLOW
+                {pos.lockedCollateral} USDC
               </div>
             </div>
           )}
@@ -170,7 +171,7 @@ function ShieldedPositionRow({
             <div>
               <div className="text-xs text-slate-500 mb-0.5">Payout</div>
               <div className="font-mono text-sm font-semibold text-emerald-400">
-                {claimState.payout} FLOW
+                {claimState.payout} USDC
               </div>
             </div>
           )}
@@ -248,7 +249,7 @@ function ShieldedPositionRow({
             rel="noopener noreferrer"
             className="underline underline-offset-2 hover:text-emerald-300 transition-colors"
           >
-            View on Flowscan →
+            View on Etherscan →
           </a>
         </p>
       )}
@@ -260,7 +261,7 @@ function ShieldedPositionRow({
       )}
       {hasLocked && claimState.phase === 'idle' && (
         <p className="mt-3 text-[11px] text-amber-500/60 border-t border-white/5 pt-3">
-          {parseFloat(pos.lockedCollateral).toFixed(4)} FLOW locked as collateral on Flow EVM —
+          {pos.lockedCollateral} USDC locked as collateral on Ethereum Sepolia —
           {resolved ? ' market resolved, claim your payout above.' : ' released at settlement.'}
         </p>
       )}
@@ -277,13 +278,13 @@ function OnChainPositionRow({
   pos: OnChainPosition;
   index: number;
 }) {
-  const totalFlow = pos.yesFlow + pos.noFlow;
+  const totalUsdc = pos.yesUsdc + pos.noUsdc;
   const expiryIso = new Date(pos.market.expiryAt * 1000).toISOString();
   const resolved  = pos.market.status === 1;
   const won =
     resolved &&
-    ((pos.market.outcome && pos.yesFlow > 0) ||
-      (!pos.market.outcome && pos.noFlow > 0));
+    ((pos.market.outcome && pos.yesUsdc > 0) ||
+      (!pos.market.outcome && pos.noUsdc > 0));
 
   return (
     <motion.div
@@ -298,12 +299,12 @@ function OnChainPositionRow({
         <div className="flex flex-col sm:flex-row sm:items-center gap-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-2 flex-wrap">
-              {pos.yesFlow > 0 && (
+              {pos.yesUsdc > 0 && (
                 <span className="px-2.5 py-1 rounded-lg text-xs font-medium bg-emerald-500/10 text-emerald-500">
                   YES
                 </span>
               )}
-              {pos.noFlow > 0 && (
+              {pos.noUsdc > 0 && (
                 <span className="px-2.5 py-1 rounded-lg text-xs font-medium bg-rose-500/10 text-rose-500">
                   NO
                 </span>
@@ -344,7 +345,7 @@ function OnChainPositionRow({
             <div>
               <div className="text-xs text-slate-500 mb-0.5">Staked</div>
               <div className="font-mono text-sm font-semibold text-white">
-                {totalFlow.toFixed(4)} FLOW
+                {totalUsdc.toFixed(4)} USDC
               </div>
             </div>
             {resolved && (
@@ -404,17 +405,17 @@ export default function PortfolioPage() {
           ).catch(() => 0n);
           if (locked === 0n) return;
 
-          const yesEth = Number(locked) / 1e18;
-          const noEth  = 0;
+          const yesUsdc = Number(locked) / 1e6;
+          const noUsdc  = 0;
           const dominantSide: OnChainPosition['dominantSide'] = 'YES';
 
           results.push({
             market,
-            yesEth,
-            noEth,
+            yesUsdc,
+            noUsdc,
             claimed:            false,
             dominantSide,
-            currentYesPricePct: market.yesPrice ?? 50,
+            currentYesPricePct: Math.round((market.yesPrice ?? 0.5) * 100),
           });
         }),
       );
@@ -447,9 +448,12 @@ export default function PortfolioPage() {
             );
             const zero = '0x' + '0'.repeat(64);
             if (handles.yesHandle === zero && handles.noHandle === zero) return;
+            const marketIdBytes32 = (
+              '0x' + BigInt(market.id).toString(16).padStart(64, '0')
+            ) as `0x${string}`;
             const [meta, lockedCollateral] = await Promise.all([
               readEammMarketMeta(market.id),
-              readLockedAmount(user.evmAddress as `0x${string}`, market.id),
+              readLockedAmount(user.evmAddress as `0x${string}`, marketIdBytes32),
             ]);
             // Closed shielded position: market resolved and collateral lock released.
             if (meta.status === 1 && Number(lockedCollateral) === 0) return;
@@ -459,7 +463,7 @@ export default function PortfolioPage() {
               yesHandle:        handles.yesHandle,
               noHandle:         handles.noHandle,
               meta,
-              lockedCollateral,
+              lockedCollateral: formatUsdc(lockedCollateral),
               revealed:         false,
               revealedYes:      null,
               revealedNo:       null,
@@ -508,8 +512,8 @@ export default function PortfolioPage() {
    * Claim payout for a resolved shielded market (Phase 6).
    *
    * 1. Request a signed settlement claim from the oracle service.
-   * 2. Submit GhostVault.claimPayout() on Flow EVM with the oracle signature.
-   * 3. Show success + Flowscan link.
+   * 2. Submit GhostVault.claimPayout() on Ethereum Sepolia with the oracle signature.
+   * 3. Show success + Etherscan link.
    */
   const handleClaim = useCallback(async (marketId: number) => {
     if (!user.evmAddress || !walletClient) return;
@@ -548,8 +552,8 @@ export default function PortfolioPage() {
         claim.sig as `0x${string}`,
       );
 
-      const payoutEth = (Number(BigInt(claim.payout)) / 1e18).toFixed(4);
-      setPhase({ phase: 'success', txHash, payout: payoutEth });
+      const payoutUsdc = (Number(BigInt(claim.payout)) / 1e6).toFixed(4);
+      setPhase({ phase: 'success', txHash, payout: payoutUsdc });
       // Refresh lists so claimed/closed positions disappear from the open view.
       await Promise.all([fetchShieldedPositions(), fetchOnChainPositions()]);
     } catch (err) {

@@ -35,8 +35,8 @@ interface BetSlipProps {
 
 type TxState =
   | { phase: 'idle' }
-  | { phase: 'depositing' }                    // depositing FLOW into vault (auto, if balance low)
-  | { phase: 'locking' }                       // locking collateral on Flow EVM
+  | { phase: 'depositing' }                    // depositing USDC into vault (auto, if balance low)
+  | { phase: 'locking' }                       // locking collateral on Ethereum Sepolia
   | { phase: 'encrypting' }                    // encrypting amount with fhevmjs
   | { phase: 'signing' }                       // awaiting wallet sig for placeBet
   | { phase: 'pending'; hash: string }
@@ -60,7 +60,7 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
   const [amount, setAmount]       = useState('');
   const [txState, setTxState]     = useState<TxState>({ phase: 'idle' });
   const [mounted, setMounted]     = useState(false);
-  // shieldedMode: true = route through GhostEAMM (Zama fhevm), false = GhostMarket (Flow EVM)
+  // shieldedMode: true = route through GhostEAMM (Zama fhevm), false = GhostMarket on Sepolia (public)
   const [shieldedMode, setShieldedMode] = useState(isEammDeployed());
 
   const { user, login, isLoading } = useFlowAuth();
@@ -94,14 +94,14 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
   // ─── Shielded path (eAMM on Zama / Ethereum Sepolia) ───────────────────────
   //
   // Two-layer flow:
-  //   Layer 1 (Flow EVM) — lock collateral in GhostVault so the stake cannot
+  //   Layer 1 (Sepolia) — lock USDC in GhostVault so the stake cannot
   //                         be withdrawn before settlement.
   //   Layer 2 (Zama)     — encrypt the bet amount and submit to GhostEAMM so
   //                         position size is invisible to other participants.
   const handleShieldedSubmit = async () => {
     const amountWei = parseUsdc(amount);
 
-    // ── Layer 1: ensure vault balance, then lock collateral on Flow EVM ─────────
+    // ── Layer 1: ensure vault balance, then lock collateral on Sepolia ─────────
     // Step A: auto-deposit if the user's free vault balance < bet amount.
     // Step B: lock the collateral so it can't be withdrawn before settlement.
     // Skip if a lock already exists (retry path — previous attempt locked but Sepolia failed).
@@ -552,7 +552,7 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
                     </div>
                   )}
 
-                  {/* Depositing FLOW notice */}
+                  {/* Depositing USDC notice */}
                   {txState.phase === 'depositing' && (
                     <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-3">
                       <Loader2 className="h-4 w-4 text-emerald-400 animate-spin shrink-0" />

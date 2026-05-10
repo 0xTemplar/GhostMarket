@@ -1,5 +1,6 @@
 'use client';
 
+import React from 'react';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { Activity, Star, ArrowRight, Zap } from 'lucide-react';
@@ -38,13 +39,33 @@ function formatCount(value: number) {
 }
 
 function MarketMetaStrip({ market }: { market: Market }) {
+  const hasVolume   = market.volume > 0;
+  const hasLiq      = market.liquidity > 0;
+  const hasTraders  = market.tradersCount > 0;
+
+  // FHE markets have no on-chain pool metadata — show encrypted indicator instead.
+  if (!hasVolume && !hasLiq && !hasTraders) {
+    return (
+      <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+        <span className="w-1 h-1 rounded-full bg-indigo-400/60 shrink-0" />
+        <span>FHE encrypted pools</span>
+      </div>
+    );
+  }
+
+  const parts: React.ReactNode[] = [];
+  if (hasVolume)  parts.push(<span key="vol">Vol {formatVolume(market.volume)}</span>);
+  if (hasLiq)     parts.push(<span key="liq">Liq {formatVolume(market.liquidity)}</span>);
+  if (hasTraders) parts.push(<span key="traders">{formatCount(market.tradersCount)} traders</span>);
+
   return (
     <div className="flex items-center gap-3 text-[11px] text-slate-400">
-      <span>Vol {formatVolume(market.volume)}</span>
-      <span className="text-white/10">|</span>
-      <span>Liq {formatVolume(market.liquidity)}</span>
-      <span className="text-white/10">|</span>
-      <span>{formatCount(market.tradersCount)} traders</span>
+      {parts.map((p, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && <span className="text-white/10">|</span>}
+          {p}
+        </React.Fragment>
+      ))}
     </div>
   );
 }
@@ -146,10 +167,12 @@ function CardFooter({
   return (
     <div className="flex justify-between items-center pt-3 border-t border-white/5">
       <div className="flex items-center gap-3 text-xs text-slate-500">
-        <span className="flex items-center gap-1">
-          <Activity className="w-3 h-3" strokeWidth={1.5} />
-          {formatVolume(market.volume)}
-        </span>
+        {market.volume > 0 && (
+          <span className="flex items-center gap-1">
+            <Activity className="w-3 h-3" strokeWidth={1.5} />
+            {formatVolume(market.volume)}
+          </span>
+        )}
         {market.trending && (
           <span className="text-slate-400 font-medium">Trending</span>
         )}

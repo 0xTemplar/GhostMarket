@@ -70,8 +70,12 @@ function buildRecentActivity(market: Market): ActivityItem[] {
 
 // ─── On-chain market actions panel ───────────────────────────────────────────
 
+// USDC has 6 decimals. Format base units to a 2-decimal display string.
+function fmtUsdc(baseUnits: string): string {
+  return (parseFloat(baseUnits) / 1e6).toFixed(2);
+}
+
 function OnChainActions({
-  market,
   raw,
 }: {
   market: Market;
@@ -82,8 +86,9 @@ function OnChainActions({
   const [posLoading, setPosLoading] = useState(false);
   const [shieldedPos, setShieldedPos] = useState<{
     hasYes: boolean; hasNo: boolean;
-    locked: string; side: string;
-    computedPayout: string;
+    locked: string;       // USDC base units as string
+    side: string;
+    computedPayout: string; // USDC base units as string
     vaultResolved: boolean;
   } | null>(null);
   const [actionState, setActionState] = useState<
@@ -92,6 +97,8 @@ function OnChainActions({
     | { phase: 'success'; hash: string; label?: string }
     | { phase: 'error'; msg: string }
   >({ phase: 'idle' });
+
+  const marketIdBytes32 = ('0x' + BigInt(raw.id).toString(16).padStart(64, '0')) as `0x${string}`;
 
   const loadPosition = useCallback(async () => {
     if (!user.evmAddress) return;
@@ -104,50 +111,46 @@ function OnChainActions({
         isEammDeployed()
           ? readEammPositionHandles(raw.id, addr).catch(() => null)
           : Promise.resolve(null),
-        isEammDeployed() ? readLockedAmount(addr, ('0x' + BigInt(raw.id).toString(16).padStart(64, '0')) as `0x${string}`) : Promise.resolve(0n),
-        isEammDeployed() ? readComputedPayout(addr, ('0x' + BigInt(raw.id).toString(16).padStart(64, '0')) as `0x${string}`) : Promise.resolve(0n),
-        isEammDeployed() ? readIsMarketResolved(('0x' + BigInt(raw.id).toString(16).padStart(64, '0')) as `0x${string}`) : Promise.resolve(false),
+        isEammDeployed() ? readLockedAmount(addr, marketIdBytes32) : Promise.resolve(0n),
+        isEammDeployed() ? readComputedPayout(addr, marketIdBytes32) : Promise.resolve(0n),
+        isEammDeployed() ? readIsMarketResolved(marketIdBytes32) : Promise.resolve(false),
       ]);
 
       if (handles) {
         const hasYes = handles.yesHandle !== zero;
         const hasNo  = handles.noHandle  !== zero;
-        const lockedStr = (Number(locked) / 1e18).toFixed(4);
-        const payoutStr = (Number(computedPayout) / 1e18).toFixed(4);
-        if (hasYes || hasNo) {
-          const side = hasYes && hasNo ? 'YES + NO' : hasYes ? 'YES' : 'NO';
-          setShieldedPos({ hasYes, hasNo, locked: lockedStr, side, computedPayout: payoutStr, vaultResolved });
-        } else if (Number(locked) > 0) {
+        if (hasYes || hasNo || Number(locked) > 0) {
+          const side = hasYes && hasNo ? 'YES + NO' : hasYes ? 'YES' : hasNo ? 'NO' : '?';
           setShieldedPos({
-            hasYes: false, hasNo: false, locked: lockedStr, side: '?',
-            computedPayout: payoutStr, vaultResolved,
+            hasYes, hasNo,
+            locked:         String(locked),
+            side,
+            computedPayout: String(computedPayout),
+            vaultResolved,
           });
         }
       }
-
     } finally {
       setPosLoading(false);
     }
-  }, [user.evmAddress, raw.id]);
+  }, [user.evmAddress, raw.id, marketIdBytes32]);
 
-  // Initial load + auto-refresh every 15s so settled positions surface without a manual refresh
   useEffect(() => {
     loadPosition();
     const interval = setInterval(loadPosition, 15_000);
     return () => clearInterval(interval);
   }, [loadPosition]);
 
-  const handleWithdraw = async (amountUsdc: string) => {
+  const handleWithdraw = async (usdcBaseUnits: string) => {
     if (!walletClient || !user.evmAddress) return;
     setActionState({ phase: 'loading' });
     try {
-      const { parseUnits } = await import('viem');
       const { GHOST_VAULT_ABI } = await import('@/lib/vault');
       const hash = await walletClient.writeContract({
         address:      GHOST_VAULT_ADDRESS,
         abi:          GHOST_VAULT_ABI,
         functionName: 'withdraw',
-        args:         [parseUnits(amountUsdc, 6)],
+        args:         [BigInt(usdcBaseUnits)],
         account:      user.evmAddress as `0x${string}`,
         chain:        undefined,
       });
@@ -164,27 +167,21 @@ function OnChainActions({
 
   if (!user.loggedIn) return null;
 
-  const canClaim =
-    legacyPublicEnabled &&
-    !userPos?.claimed &&
-    (raw.status === 1 || refundEligible) &&
-    (userPos?.yes || userPos?.no);
-
-  // Shielded position settled: oracle credited vault, user can now withdraw
+  // Shielded position settled: payout credited, lock fully released
   const shieldedSettled =
     shieldedPos !== null &&
     shieldedPos.vaultResolved &&
-    parseFloat(shieldedPos.locked) === 0;
+    BigInt(shieldedPos.locked) === 0n;
 
-  // Shielded position awaiting settlement: vault resolved but lock not yet released
+  // Shielded position awaiting settlement: market resolved but lock still held
   const shieldedPendingSettlement =
     shieldedPos !== null &&
     shieldedPos.vaultResolved &&
-    parseFloat(shieldedPos.locked) > 0;
+    BigInt(shieldedPos.locked) > 0n;
 
   const shieldedWon =
     shieldedPendingSettlement &&
-    parseFloat(shieldedPos!.computedPayout) > 0;
+    BigInt(shieldedPos!.computedPayout) > 0n;
 
   return (
     <div className="rounded-2xl border border-white/5 bg-slate-900 p-5 space-y-4">
@@ -199,34 +196,15 @@ function OnChainActions({
         </button>
       </div>
 
-      {posLoading && !shieldedPos && !userPos ? (
+      {posLoading && !shieldedPos ? (
         <div className="flex items-center gap-2 text-sm text-slate-500">
           <Loader2 className="h-4 w-4 animate-spin" />
           Loading…
         </div>
-      ) : userPos?.yes || userPos?.no || shieldedPos ? (
+      ) : shieldedPos ? (
         <div className="space-y-3">
-          {/* Public on-chain position */}
-          {legacyPublicEnabled && (userPos?.yes || userPos?.no) && (
-            <div className="space-y-2">
-              {userPos!.yes && (
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                  <span className="text-slate-300 font-mono">{userPos!.yes}</span>
-                </div>
-              )}
-              {userPos!.no && (
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="h-2 w-2 rounded-full bg-rose-500" />
-                  <span className="text-slate-300 font-mono">{userPos!.no}</span>
-                </div>
-              )}
-              {userPos!.claimed && <p className="text-xs text-emerald-400">✓ Claimed</p>}
-            </div>
-          )}
-
-          {/* Shielded position on GhostEAMM */}
-          {shieldedPos && !shieldedSettled && (
+          {/* Active shielded position */}
+          {!shieldedSettled && (
             <div className={cn(
               'rounded-lg border p-3 space-y-1.5',
               shieldedPendingSettlement && shieldedWon
@@ -248,7 +226,7 @@ function OnChainActions({
                     <p className="text-xs text-emerald-300 font-medium">
                       You won! Oracle settling — payout{' '}
                       <span className="font-mono font-bold">
-                        {parseFloat(shieldedPos.computedPayout).toFixed(4)} FLOW
+                        {fmtUsdc(shieldedPos.computedPayout)} USDC
                       </span>{' '}
                       will be credited to your vault.
                     </p>
@@ -260,7 +238,7 @@ function OnChainActions({
                   <div className="flex items-center gap-1.5 text-xs">
                     <span className="text-slate-500">Collateral locked:</span>
                     <span className="font-mono text-amber-400">
-                      {parseFloat(shieldedPos.locked).toFixed(4)} FLOW
+                      {fmtUsdc(shieldedPos.locked)} USDC
                     </span>
                   </div>
                 </>
@@ -269,11 +247,11 @@ function OnChainActions({
                   <p className="text-xs text-slate-400 leading-relaxed">
                     Bet amount is FHE-encrypted on the eAMM — exact size is private.
                   </p>
-                  {parseFloat(shieldedPos.locked) > 0 && (
+                  {BigInt(shieldedPos.locked) > 0n && (
                     <div className="flex items-center gap-1.5 text-xs">
                       <span className="text-slate-500">Collateral locked:</span>
                       <span className="font-mono text-amber-400">
-                        {parseFloat(shieldedPos.locked).toFixed(4)} FLOW
+                        {fmtUsdc(shieldedPos.locked)} USDC
                       </span>
                     </div>
                   )}
@@ -291,7 +269,7 @@ function OnChainActions({
               </div>
               <p className="text-xs text-slate-400 leading-relaxed">
                 Your payout has been credited to your vault balance.
-                Withdraw to send FLOW to your wallet.
+                Withdraw to send USDC to your wallet.
               </p>
             </div>
           )}
@@ -311,7 +289,7 @@ function OnChainActions({
               className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
             >
               <ExternalLink className="h-3.5 w-3.5" />
-              View on Flowscan
+              View on Etherscan
             </a>
           </div>
         ) : actionState.phase === 'error' ? (
@@ -330,17 +308,7 @@ function OnChainActions({
           </div>
         ) : (
           <>
-            {/* Legacy public-market claim */}
-            {canClaim && (
-              <button
-                onClick={handleClaim}
-                className="w-full h-10 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
-              >
-                {raw.status === 1 ? 'Claim Winnings' : 'Claim Refund'}
-              </button>
-            )}
-
-            {/* Shielded: withdraw payout from vault to wallet */}
+            {/* Withdraw settled payout from vault to wallet */}
             {shieldedSettled && (
               <button
                 onClick={() => handleWithdraw(shieldedPos?.computedPayout ?? '0')}
@@ -389,7 +357,24 @@ export default function MarketDetailPage() {
           } else {
             setRawMarket(raw);
             setEammMeta(meta);
-            setMarket({ id: raw.id, title: raw.title, description: raw.description, category: raw.category, status: raw.status === 0 ? 'active' : raw.status === 1 ? 'resolved' : 'cancelled', endDate: new Date(raw.expiryAt * 1000).toISOString(), yesPrice: raw.yesPrice ?? 0.5, noPrice: raw.noPrice ?? 0.5 });
+            setMarket({
+              id:               String(raw.id),
+              title:            raw.title,
+              description:      raw.description,
+              category:         raw.category as Market['category'],
+              resolutionSource: raw.resolutionSource ?? '',
+              status:           raw.status === 0 ? 'active' : raw.status === 1 ? 'resolved' : 'cancelled',
+              expiryAt:         new Date(raw.expiryAt * 1000).toISOString(),
+              createdAt:        new Date().toISOString(),
+              yesPrice:         raw.yesPrice ?? 0.5,
+              noPrice:          raw.noPrice ?? 0.5,
+              volume:           0,
+              liquidity:        0,
+              tradersCount:     0,
+              priceHistory:     [],
+              change24h:        0,
+              trending:         false,
+            });
           }
         } catch {
           if (!cancelled) setError('Failed to load market data.');
@@ -520,12 +505,24 @@ export default function MarketDetailPage() {
           {/* Left column */}
           <div className="lg:col-span-2 space-y-6">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <StatPill label="Volume"   value={formatVolume(market.volume)} />
-              <StatPill label="Liquidity" value={formatVolume(market.liquidity)} />
-              <StatPill label="Traders"  value={rawMarket ? '—' : formatTraders(market.tradersCount)} />
-              <StatPill label="Time Left" value={formatTimeRemaining(market.expiryAt)} />
+              {rawMarket ? (
+                <>
+                  <StatPill label="Volume"    value="Encrypted" />
+                  <StatPill label="Liquidity" value="Encrypted" />
+                  <StatPill label="Traders"   value="—" />
+                  <StatPill label="Time Left" value={formatTimeRemaining(market.expiryAt)} />
+                </>
+              ) : (
+                <>
+                  <StatPill label="Volume"    value={formatVolume(market.volume)} />
+                  <StatPill label="Liquidity" value={formatVolume(market.liquidity)} />
+                  <StatPill label="Traders"   value={formatTraders(market.tradersCount)} />
+                  <StatPill label="Time Left" value={formatTimeRemaining(market.expiryAt)} />
+                </>
+              )}
             </div>
 
+            {(market.priceHistory?.length ?? 0) >= 2 && (
             <div className="rounded-2xl border border-white/5 bg-slate-900 p-5">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-sm font-semibold text-white">Price History</h3>
@@ -534,14 +531,12 @@ export default function MarketDetailPage() {
                     <span className="h-2 w-2 rounded-full bg-yes" />
                     YES
                   </span>
-                  {rawMarket
-                    ? <span className="text-slate-600 italic">Live from contract</span>
-                    : <span>30 day</span>
-                  }
+                  <span>30 day</span>
                 </div>
               </div>
               <AreaChart data={market.priceHistory} height={220} />
             </div>
+            )}
 
             <div className="rounded-2xl border border-white/8 bg-slate-950/85 p-5">
               <div className="flex items-center justify-between mb-4">

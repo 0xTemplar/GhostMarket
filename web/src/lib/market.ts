@@ -1,7 +1,7 @@
 /**
  * market.ts — GhostMarket contract helpers for Ethereum Sepolia.
  *
- * Replaces the old flow/market.ts (which targeted Flow EVM chain 545).
+ * Reads GhostMarket contract state on Ethereum Sepolia.
  * GhostMarket is now deployed on Sepolia alongside GhostEAMM and GhostVault.
  */
 
@@ -101,8 +101,9 @@ export interface FrontendMarket {
   status:           MarketStatus;
   outcome:          boolean;
   creator:          string;
-  // Derived display fields
-  yesPrice?:        number;   // 0-100, fetched from EAMM meta if available
+  // Derived display fields — 0-1 fraction (e.g. 0.62 = 62¢).
+  // Undefined for FHE markets (pools are encrypted). Callers should fall back to 0.5.
+  yesPrice?:        number;
   noPrice?:         number;
 }
 
