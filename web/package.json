@@ -9,9 +9,6 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@onflow/dev-wallet": "^0.0.10",
-    "@onflow/fcl": "^1.21.9",
-    "@onflow/fcl-ethereum-provider": "^0.1.1",
     "@privy-io/react-auth": "^3.16.0",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-slot": "^1.2.4",

@@ -12,10 +12,9 @@ import { mockMarkets } from '@/data/markets';
 import type { Market } from '@/types/market';
 import {
   readAllMarkets,
-  toFrontendMarket,
   isMarketDeployed,
-} from '@/lib/flow/market';
-import { isEammDeployed, readEammMarketMeta } from '@/lib/flow/eamm';
+} from '@/lib/market';
+import { isEammDeployed, readEammMarketMeta } from '@/lib/eamm';
 
 // ─── Data loading ─────────────────────────────────────────────────────────────
 
@@ -31,25 +30,43 @@ function useMarkets() {
     }
     try {
       const raw = await readAllMarkets();
-      // Home feed only shows markets that are open on Flow AND not finalized on Sepolia eAMM.
-      const flowOpen = raw.filter((m) => m.status === 0);
-      const crossChainOpen = isEammDeployed()
+      // Filter to active markets (status 0 = Active in GhostMarket.sol).
+      const activeMarkets = raw.filter((m) => m.status === 0);
+
+      // Optionally filter by EAMM status (hides markets resolved in the FHE AMM).
+      const keep = isEammDeployed()
         ? (await Promise.all(
-            flowOpen.map(async (m) => {
+            activeMarkets.map(async (m) => {
               try {
                 const eammMeta = await readEammMarketMeta(m.id);
-                // eAMM status: 0 Active | 1 Resolved | 2 Cancelled
-                return eammMeta.status === 0;
+                return eammMeta.status === 0; // 0 = Active
               } catch {
-                // If eAMM lookup fails (market not mirrored / rpc hiccup), keep market visible.
                 return true;
               }
             }),
           ))
-        : flowOpen.map(() => true);
+        : activeMarkets.map(() => true);
 
-      const openMarkets = flowOpen.filter((_, i) => crossChainOpen[i]);
-      setOnChain(openMarkets.map(toFrontendMarket).filter((m) => m.status === 'active'));
+      const openMarkets = activeMarkets.filter((_, i) => keep[i]);
+      setOnChain(openMarkets.map((m) => ({
+        id:               String(m.id),
+        title:            m.title,
+        description:      m.description,
+        category:         m.category as Market['category'],
+        resolutionSource: m.resolutionSource ?? '',
+        status:           'active' as const,
+        expiryAt:         new Date(m.expiryAt * 1000).toISOString(),
+        createdAt:        new Date().toISOString(),
+        yesPrice:         m.yesPrice ?? 0.5,
+        noPrice:          m.noPrice ?? 0.5,
+        // FHE pools are encrypted — these metrics are unavailable on-chain.
+        volume:       0,
+        liquidity:    0,
+        tradersCount: 0,
+        priceHistory: [],
+        change24h:    0,
+        trending:     false,
+      })));
     } catch {
       // silently fall back to mock data
     } finally {
@@ -64,18 +81,14 @@ function useMarkets() {
 
   /**
    * Merge strategy:
-   *  - On-chain markets are shown first (real data, live prices).
-   *  - Mock markets that share a title with an on-chain market are suppressed.
-   *  - Remaining mock markets fill the listing so it never looks empty during
-   *    testnet when only a few on-chain markets exist.
+   *  - Once any on-chain market is loaded, show ONLY on-chain markets.
+   *  - Mock markets are shown only while the chain hasn't returned data yet
+   *    (pre-hydration or when the contract address isn't configured).
    */
   const markets: Market[] = useMemo(() => {
     if (!hydrated) return mockMarkets.filter((m) => m.status === 'active');
-
-    const onChainTitles = new Set(onChain.map((m) => m.title));
-    const filteredMock  = mockMarkets.filter((m) => m.status === 'active' && !onChainTitles.has(m.title));
-
-    return [...onChain, ...filteredMock];
+    if (onChain.length > 0) return onChain;
+    return mockMarkets.filter((m) => m.status === 'active');
   }, [onChain, hydrated]);
 
   return { markets, loading, onChainCount: onChain.length };

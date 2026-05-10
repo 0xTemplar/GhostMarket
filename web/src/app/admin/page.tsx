@@ -10,12 +10,12 @@ import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
 import { triggerOracleResolution } from '@/lib/oracle-client';
 import {
   readAllMarkets, GHOST_MARKET_ADDRESS, GHOST_MARKET_ABI,
-  type OnChainMarket,
-} from '@/lib/flow/market';
-import { publicClient, flowTestnet } from '@/lib/flow/vault';
+  type FrontendMarket, MarketStatus,
+} from '@/lib/market';
+import { publicClient } from '@/lib/vault';
 import { cn } from '@/lib/utils';
 
-const FLOWSCAN = 'https://evm-testnet.flowscan.io';
+const ETHERSCAN = 'https://sepolia.etherscan.io';
 
 const CATEGORIES = ['Crypto', 'Macro', 'Politics', 'Tech', 'Sports', 'Climate'] as const;
 
@@ -50,7 +50,7 @@ function ResolvePanel({
   market,
   onDone,
 }: {
-  market: OnChainMarket;
+  market: FrontendMarket;
   onDone: () => void;
 }) {
   const [outcome, setOutcome]   = useState<'YES' | 'NO'>('YES');
@@ -129,7 +129,7 @@ export default function AdminPage() {
   const { user, isLoading } = useFlowAuth();
   const walletClient = useFlowWalletClient();
 
-  const [markets,       setMarkets]       = useState<OnChainMarket[]>([]);
+  const [markets,       setMarkets]       = useState<FrontendMarket[]>([]);
   const [marketsLoading, setMarketsLoading] = useState(true);
   const [createTx,      setCreateTx]      = useState<TxState>({ phase: 'idle' });
   const [showResolve,   setShowResolve]   = useState<number | null>(null);
@@ -173,7 +173,6 @@ export default function AdminPage() {
         functionName: 'createMarket',
         args: [title, description, category, resolution, BigInt(expiryAt)],
         account,
-        chain: flowTestnet,
       });
       const hash = await walletClient.writeContract(request);
       setCreateTx({ phase: 'pending', hash });
@@ -235,8 +234,8 @@ export default function AdminPage() {
     );
   }
 
-  const activeMarkets   = markets.filter((m) => m.status === 0);
-  const resolvedMarkets = markets.filter((m) => m.status === 1);
+  const activeMarkets   = markets.filter((m) => m.status === MarketStatus.Active);
+  const resolvedMarkets = markets.filter((m) => m.status === MarketStatus.Resolved);
   const isCreateBusy    = createTx.phase === 'signing' || createTx.phase === 'pending';
 
   return (
@@ -262,16 +261,16 @@ export default function AdminPage() {
         {GHOST_MARKET_ADDRESS && (
           <div className="rounded-xl border border-white/5 bg-slate-900 px-5 py-4 flex items-center justify-between gap-4">
             <div>
-              <p className="text-xs text-slate-500 mb-1">GhostMarket contract</p>
+              <p className="text-xs text-slate-500 mb-1">GhostMarket contract (Sepolia)</p>
               <p className="font-mono text-sm text-slate-300">{GHOST_MARKET_ADDRESS}</p>
             </div>
             <a
-              href={`${FLOWSCAN}/address/${GHOST_MARKET_ADDRESS}`}
+              href={`${ETHERSCAN}/address/${GHOST_MARKET_ADDRESS}`}
               target="_blank"
               rel="noreferrer"
               className="shrink-0 flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
             >
-              Flowscan <ExternalLink className="h-3.5 w-3.5" />
+              Etherscan <ExternalLink className="h-3.5 w-3.5" />
             </a>
           </div>
         )}
@@ -379,7 +378,7 @@ export default function AdminPage() {
                     Market created{createTx.marketId ? ` as #${createTx.marketId}` : ''}!
                   </p>
                   <a
-                    href={`${FLOWSCAN}/tx/${createTx.hash}`}
+                    href={`${ETHERSCAN}/tx/${createTx.hash}`}
                     target="_blank"
                     rel="noreferrer"
                     className="text-xs text-emerald-400 underline underline-offset-2"
@@ -455,8 +454,7 @@ export default function AdminPage() {
                         </div>
                         <p className="text-sm font-medium text-white truncate">{m.title}</p>
                         <p className="text-xs text-slate-500 mt-1">
-                          Pool: {(Number(m.yesPool + m.noPool) / 1e18).toFixed(4)} FLOW ·
-                          YES {Math.round(m.yesPriceBps / 100)}¢ · Expires{' '}
+                          Encrypted pools (FHE) · Expires{' '}
                           {new Date(m.expiryAt * 1000).toLocaleDateString()}
                         </p>
                       </div>

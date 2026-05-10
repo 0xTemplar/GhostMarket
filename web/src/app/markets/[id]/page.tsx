@@ -18,17 +18,15 @@ import {
   formatPercent, cn,
 } from '@/lib/utils';
 import {
-  readMarket, toFrontendMarket, type OnChainMarket,
-  claimWinnings, claimRefund, readUserPosition, readIsRefundEligible,
-} from '@/lib/flow/market';
+  readMarket, type FrontendMarket,
+} from '@/lib/market';
 import {
   readEammPositionHandles, readEammMarketMeta, isEammDeployed,
-} from '@/lib/flow/eamm';
+} from '@/lib/eamm';
 import {
   readLockedAmount, readComputedPayout, readIsMarketResolved,
-  GHOST_VAULT_ADDRESS, GHOST_VAULT_ABI, publicClient as flowPublicClient,
-  parseEther,
-} from '@/lib/flow/vault';
+  GHOST_VAULT_ADDRESS, publicClient,
+} from '@/lib/vault';
 import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -45,7 +43,7 @@ type ActivityItem = {
   minsAgo: number;
 };
 
-const FLOWSCAN = 'https://evm-testnet.flowscan.io';
+const ETHERSCAN = 'https://sepolia.etherscan.io';
 
 function buildRecentActivity(market: Market): ActivityItem[] {
   const yesPct = Math.round(market.yesPrice * 100);
@@ -72,23 +70,26 @@ function buildRecentActivity(market: Market): ActivityItem[] {
 
 // ─── On-chain market actions panel ───────────────────────────────────────────
 
+// USDC has 6 decimals. Format base units to a 2-decimal display string.
+function fmtUsdc(baseUnits: string): string {
+  return (parseFloat(baseUnits) / 1e6).toFixed(2);
+}
+
 function OnChainActions({
-  market,
   raw,
 }: {
   market: Market;
-  raw: OnChainMarket;
+  raw: FrontendMarket;
 }) {
   const { user } = useFlowAuth();
   const walletClient = useFlowWalletClient();
   const [posLoading, setPosLoading] = useState(false);
-  const [userPos, setUserPos] = useState<{ yes: string; no: string; claimed: boolean } | null>(null);
-  const [refundEligible, setRefundEligible] = useState(false);
   const [shieldedPos, setShieldedPos] = useState<{
     hasYes: boolean; hasNo: boolean;
-    locked: string; side: string;
-    computedPayout: string;   // on-chain Option B payout (0 = loser or unresolved)
-    vaultResolved: boolean;   // true if oracle has reported outcome to GhostVault
+    locked: string;       // USDC base units as string
+    side: string;
+    computedPayout: string; // USDC base units as string
+    vaultResolved: boolean;
   } | null>(null);
   const [actionState, setActionState] = useState<
     | { phase: 'idle' }
@@ -96,7 +97,8 @@ function OnChainActions({
     | { phase: 'success'; hash: string; label?: string }
     | { phase: 'error'; msg: string }
   >({ phase: 'idle' });
-  const legacyPublicEnabled = !isEammDeployed();
+
+  const marketIdBytes32 = ('0x' + BigInt(raw.id).toString(16).padStart(64, '0')) as `0x${string}`;
 
   const loadPosition = useCallback(async () => {
     if (!user.evmAddress) return;
@@ -105,85 +107,54 @@ function OnChainActions({
       const addr = user.evmAddress as `0x${string}`;
       const zero = '0x' + '0'.repeat(64);
 
-      const [pos, eligible, handles, locked, computedPayout, vaultResolved] = await Promise.all([
-        legacyPublicEnabled ? readUserPosition(raw.id, addr) : Promise.resolve(null),
-        legacyPublicEnabled ? readIsRefundEligible(raw.id) : Promise.resolve(false),
+      const [handles, locked, computedPayout, vaultResolved] = await Promise.all([
         isEammDeployed()
           ? readEammPositionHandles(raw.id, addr).catch(() => null)
           : Promise.resolve(null),
-        isEammDeployed() ? readLockedAmount(addr, raw.id)         : Promise.resolve('0'),
-        isEammDeployed() ? readComputedPayout(addr, raw.id)       : Promise.resolve('0'),
-        isEammDeployed() ? readIsMarketResolved(raw.id)           : Promise.resolve(false),
+        isEammDeployed() ? readLockedAmount(addr, marketIdBytes32) : Promise.resolve(0n),
+        isEammDeployed() ? readComputedPayout(addr, marketIdBytes32) : Promise.resolve(0n),
+        isEammDeployed() ? readIsMarketResolved(marketIdBytes32) : Promise.resolve(false),
       ]);
-
-      if (pos && legacyPublicEnabled) {
-        setUserPos({
-          yes: pos.yesAmount > 0n ? `YES: ${(Number(pos.yesAmount) / 1e18).toFixed(4)} FLOW` : '',
-          no:  pos.noAmount  > 0n ? `NO: ${(Number(pos.noAmount)  / 1e18).toFixed(4)} FLOW` : '',
-          claimed: pos.claimed,
-        });
-      }
 
       if (handles) {
         const hasYes = handles.yesHandle !== zero;
         const hasNo  = handles.noHandle  !== zero;
-        if (hasYes || hasNo) {
-          const side = hasYes && hasNo ? 'YES + NO' : hasYes ? 'YES' : 'NO';
-          setShieldedPos({ hasYes, hasNo, locked, side, computedPayout, vaultResolved });
-        } else if (parseFloat(locked) > 0) {
-          // Lock exists but no EAMM handle — position pending Sepolia confirmation
+        if (hasYes || hasNo || Number(locked) > 0) {
+          const side = hasYes && hasNo ? 'YES + NO' : hasYes ? 'YES' : hasNo ? 'NO' : '?';
           setShieldedPos({
-            hasYes: false, hasNo: false, locked, side: '?',
-            computedPayout, vaultResolved,
+            hasYes, hasNo,
+            locked:         String(locked),
+            side,
+            computedPayout: String(computedPayout),
+            vaultResolved,
           });
         }
       }
-
-      setRefundEligible(legacyPublicEnabled ? eligible : false);
     } finally {
       setPosLoading(false);
     }
-  }, [user.evmAddress, raw.id, legacyPublicEnabled]);
+  }, [user.evmAddress, raw.id, marketIdBytes32]);
 
-  // Initial load + auto-refresh every 15s so settled positions surface without a manual refresh
   useEffect(() => {
     loadPosition();
     const interval = setInterval(loadPosition, 15_000);
     return () => clearInterval(interval);
   }, [loadPosition]);
 
-  const handleClaim = async () => {
-    if (!walletClient) return;
-    setActionState({ phase: 'loading' });
-    try {
-      const hash =
-        raw.status === 1
-          ? await claimWinnings(walletClient, raw.id)
-          : await claimRefund(walletClient, raw.id);
-      await flowPublicClient.waitForTransactionReceipt({ hash });
-      setActionState({ phase: 'success', hash, label: 'Claimed' });
-      await loadPosition();
-    } catch (err: unknown) {
-      const msg = err instanceof Error
-        ? err.message.includes('User rejected') ? 'Rejected.' : err.message.slice(0, 120)
-        : 'Failed.';
-      setActionState({ phase: 'error', msg });
-    }
-  };
-
-  const handleWithdraw = async (amountEther: string) => {
+  const handleWithdraw = async (usdcBaseUnits: string) => {
     if (!walletClient || !user.evmAddress) return;
     setActionState({ phase: 'loading' });
     try {
+      const { GHOST_VAULT_ABI } = await import('@/lib/vault');
       const hash = await walletClient.writeContract({
         address:      GHOST_VAULT_ADDRESS,
         abi:          GHOST_VAULT_ABI,
         functionName: 'withdraw',
-        args:         [parseEther(amountEther)],
+        args:         [BigInt(usdcBaseUnits)],
         account:      user.evmAddress as `0x${string}`,
         chain:        undefined,
       });
-      await flowPublicClient.waitForTransactionReceipt({ hash });
+      await publicClient.waitForTransactionReceipt({ hash });
       setActionState({ phase: 'success', hash, label: 'Withdrawn to wallet' });
       await loadPosition();
     } catch (err: unknown) {
@@ -196,27 +167,21 @@ function OnChainActions({
 
   if (!user.loggedIn) return null;
 
-  const canClaim =
-    legacyPublicEnabled &&
-    !userPos?.claimed &&
-    (raw.status === 1 || refundEligible) &&
-    (userPos?.yes || userPos?.no);
-
-  // Shielded position settled: oracle credited vault, user can now withdraw
+  // Shielded position settled: payout credited, lock fully released
   const shieldedSettled =
     shieldedPos !== null &&
     shieldedPos.vaultResolved &&
-    parseFloat(shieldedPos.locked) === 0;
+    BigInt(shieldedPos.locked) === 0n;
 
-  // Shielded position awaiting settlement: vault resolved but lock not yet released
+  // Shielded position awaiting settlement: market resolved but lock still held
   const shieldedPendingSettlement =
     shieldedPos !== null &&
     shieldedPos.vaultResolved &&
-    parseFloat(shieldedPos.locked) > 0;
+    BigInt(shieldedPos.locked) > 0n;
 
   const shieldedWon =
     shieldedPendingSettlement &&
-    parseFloat(shieldedPos!.computedPayout) > 0;
+    BigInt(shieldedPos!.computedPayout) > 0n;
 
   return (
     <div className="rounded-2xl border border-white/5 bg-slate-900 p-5 space-y-4">
@@ -231,34 +196,15 @@ function OnChainActions({
         </button>
       </div>
 
-      {posLoading && !shieldedPos && !userPos ? (
+      {posLoading && !shieldedPos ? (
         <div className="flex items-center gap-2 text-sm text-slate-500">
           <Loader2 className="h-4 w-4 animate-spin" />
           Loading…
         </div>
-      ) : userPos?.yes || userPos?.no || shieldedPos ? (
+      ) : shieldedPos ? (
         <div className="space-y-3">
-          {/* Public on-chain position */}
-          {legacyPublicEnabled && (userPos?.yes || userPos?.no) && (
-            <div className="space-y-2">
-              {userPos!.yes && (
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                  <span className="text-slate-300 font-mono">{userPos!.yes}</span>
-                </div>
-              )}
-              {userPos!.no && (
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="h-2 w-2 rounded-full bg-rose-500" />
-                  <span className="text-slate-300 font-mono">{userPos!.no}</span>
-                </div>
-              )}
-              {userPos!.claimed && <p className="text-xs text-emerald-400">✓ Claimed</p>}
-            </div>
-          )}
-
-          {/* Shielded position on GhostEAMM */}
-          {shieldedPos && !shieldedSettled && (
+          {/* Active shielded position */}
+          {!shieldedSettled && (
             <div className={cn(
               'rounded-lg border p-3 space-y-1.5',
               shieldedPendingSettlement && shieldedWon
@@ -280,7 +226,7 @@ function OnChainActions({
                     <p className="text-xs text-emerald-300 font-medium">
                       You won! Oracle settling — payout{' '}
                       <span className="font-mono font-bold">
-                        {parseFloat(shieldedPos.computedPayout).toFixed(4)} FLOW
+                        {fmtUsdc(shieldedPos.computedPayout)} USDC
                       </span>{' '}
                       will be credited to your vault.
                     </p>
@@ -292,7 +238,7 @@ function OnChainActions({
                   <div className="flex items-center gap-1.5 text-xs">
                     <span className="text-slate-500">Collateral locked:</span>
                     <span className="font-mono text-amber-400">
-                      {parseFloat(shieldedPos.locked).toFixed(4)} FLOW
+                      {fmtUsdc(shieldedPos.locked)} USDC
                     </span>
                   </div>
                 </>
@@ -301,11 +247,11 @@ function OnChainActions({
                   <p className="text-xs text-slate-400 leading-relaxed">
                     Bet amount is FHE-encrypted on the eAMM — exact size is private.
                   </p>
-                  {parseFloat(shieldedPos.locked) > 0 && (
+                  {BigInt(shieldedPos.locked) > 0n && (
                     <div className="flex items-center gap-1.5 text-xs">
                       <span className="text-slate-500">Collateral locked:</span>
                       <span className="font-mono text-amber-400">
-                        {parseFloat(shieldedPos.locked).toFixed(4)} FLOW
+                        {fmtUsdc(shieldedPos.locked)} USDC
                       </span>
                     </div>
                   )}
@@ -323,7 +269,7 @@ function OnChainActions({
               </div>
               <p className="text-xs text-slate-400 leading-relaxed">
                 Your payout has been credited to your vault balance.
-                Withdraw to send FLOW to your wallet.
+                Withdraw to send USDC to your wallet.
               </p>
             </div>
           )}
@@ -338,12 +284,12 @@ function OnChainActions({
           <div className="space-y-2">
             <p className="text-sm text-emerald-400">✓ {actionState.label ?? 'Done'}</p>
             <a
-              href={`${FLOWSCAN}/tx/${actionState.hash}`}
+              href={`${ETHERSCAN}/tx/${actionState.hash}`}
               target="_blank" rel="noreferrer"
               className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
             >
               <ExternalLink className="h-3.5 w-3.5" />
-              View on Flowscan
+              View on Etherscan
             </a>
           </div>
         ) : actionState.phase === 'error' ? (
@@ -362,17 +308,7 @@ function OnChainActions({
           </div>
         ) : (
           <>
-            {/* Legacy public-market claim */}
-            {canClaim && (
-              <button
-                onClick={handleClaim}
-                className="w-full h-10 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
-              >
-                {raw.status === 1 ? 'Claim Winnings' : 'Claim Refund'}
-              </button>
-            )}
-
-            {/* Shielded: withdraw payout from vault to wallet */}
+            {/* Withdraw settled payout from vault to wallet */}
             {shieldedSettled && (
               <button
                 onClick={() => handleWithdraw(shieldedPos?.computedPayout ?? '0')}
@@ -396,7 +332,7 @@ export default function MarketDetailPage() {
   const { openBetSlip } = useBetSlip();
 
   const [market,    setMarket]    = useState<Market | null>(null);
-  const [rawMarket, setRawMarket] = useState<OnChainMarket | null>(null);
+  const [rawMarket, setRawMarket] = useState<FrontendMarket | null>(null);
   const [eammMeta, setEammMeta]   = useState<{ status: number; outcome: boolean; expiryAt: number } | null>(null);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState<string | null>(null);
@@ -421,7 +357,24 @@ export default function MarketDetailPage() {
           } else {
             setRawMarket(raw);
             setEammMeta(meta);
-            setMarket(toFrontendMarket(raw));
+            setMarket({
+              id:               String(raw.id),
+              title:            raw.title,
+              description:      raw.description,
+              category:         raw.category as Market['category'],
+              resolutionSource: raw.resolutionSource ?? '',
+              status:           raw.status === 0 ? 'active' : raw.status === 1 ? 'resolved' : 'cancelled',
+              expiryAt:         new Date(raw.expiryAt * 1000).toISOString(),
+              createdAt:        new Date().toISOString(),
+              yesPrice:         raw.yesPrice ?? 0.5,
+              noPrice:          raw.noPrice ?? 0.5,
+              volume:           0,
+              liquidity:        0,
+              tradersCount:     0,
+              priceHistory:     [],
+              change24h:        0,
+              trending:         false,
+            });
           }
         } catch {
           if (!cancelled) setError('Failed to load market data.');
@@ -552,12 +505,24 @@ export default function MarketDetailPage() {
           {/* Left column */}
           <div className="lg:col-span-2 space-y-6">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <StatPill label="Volume"   value={formatVolume(market.volume)} />
-              <StatPill label="Liquidity" value={formatVolume(market.liquidity)} />
-              <StatPill label="Traders"  value={rawMarket ? '—' : formatTraders(market.tradersCount)} />
-              <StatPill label="Time Left" value={formatTimeRemaining(market.expiryAt)} />
+              {rawMarket ? (
+                <>
+                  <StatPill label="Volume"    value="Encrypted" />
+                  <StatPill label="Liquidity" value="Encrypted" />
+                  <StatPill label="Traders"   value="—" />
+                  <StatPill label="Time Left" value={formatTimeRemaining(market.expiryAt)} />
+                </>
+              ) : (
+                <>
+                  <StatPill label="Volume"    value={formatVolume(market.volume)} />
+                  <StatPill label="Liquidity" value={formatVolume(market.liquidity)} />
+                  <StatPill label="Traders"   value={formatTraders(market.tradersCount)} />
+                  <StatPill label="Time Left" value={formatTimeRemaining(market.expiryAt)} />
+                </>
+              )}
             </div>
 
+            {(market.priceHistory?.length ?? 0) >= 2 && (
             <div className="rounded-2xl border border-white/5 bg-slate-900 p-5">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-sm font-semibold text-white">Price History</h3>
@@ -566,14 +531,12 @@ export default function MarketDetailPage() {
                     <span className="h-2 w-2 rounded-full bg-yes" />
                     YES
                   </span>
-                  {rawMarket
-                    ? <span className="text-slate-600 italic">Live from contract</span>
-                    : <span>30 day</span>
-                  }
+                  <span>30 day</span>
                 </div>
               </div>
               <AreaChart data={market.priceHistory} height={220} />
             </div>
+            )}
 
             <div className="rounded-2xl border border-white/8 bg-slate-950/85 p-5">
               <div className="flex items-center justify-between mb-4">
@@ -672,7 +635,7 @@ export default function MarketDetailPage() {
                   </span>
                   <span className="text-sm font-medium text-white">
                     {rawMarket
-                      ? `${(Number(rawMarket.yesPool + rawMarket.noPool) / 1e18).toFixed(4)} FLOW`
+                      ? `— USDC (FHE-encrypted)`
                       : formatVolume(market.volume)
                     }
                   </span>
@@ -681,22 +644,21 @@ export default function MarketDetailPage() {
                   <div className="flex items-start justify-between py-2 border-b border-white/5">
                     <span className="text-sm text-slate-500 flex items-center gap-2">
                       <Droplets className="h-3.5 w-3.5" />
-                      YES / NO Pool
+                      Pool
                     </span>
                     <span className="text-sm font-medium text-white font-mono">
-                      {(Number(rawMarket.yesPool) / 1e18).toFixed(4)} /&nbsp;
-                      {(Number(rawMarket.noPool)  / 1e18).toFixed(4)} FLOW
+                      FHE-encrypted
                     </span>
                   </div>
                 )}
-                {rawMarket && (
+                {rawMarket?.creator && (
                   <div className="flex items-start justify-between py-2">
                     <span className="text-sm text-slate-500 flex items-center gap-2">
                       <Users className="h-3.5 w-3.5" />
                       Creator
                     </span>
                     <a
-                      href={`${FLOWSCAN}/address/${rawMarket.creator}`}
+                      href={`${ETHERSCAN}/address/${rawMarket.creator}`}
                       target="_blank"
                       rel="noreferrer"
                       className="text-sm font-medium text-indigo-400 hover:text-indigo-300 font-mono transition-colors"

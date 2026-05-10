@@ -26,6 +26,7 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <body
         className={`${inter.className} antialiased bg-slate-950 text-slate-300 selection:bg-indigo-500/30`}
+        suppressHydrationWarning
       >
         <AppProviders>
           <BetSlipProvider>

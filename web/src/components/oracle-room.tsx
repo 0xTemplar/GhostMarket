@@ -27,10 +27,8 @@ import {
 import { cn } from '@/lib/utils';
 
 const ORACLE_HTTP_BASE =
-  process.env.NEXT_PUBLIC_ORACLE_URL ?? 'http://localhost:8092';
-const CALIBRATION_EXPLORER_TX_BASE =
-  process.env.NEXT_PUBLIC_CALIBRATION_EXPLORER_TX_BASE ??
-  'https://calibration.filscan.io/tx/';
+  process.env.NEXT_PUBLIC_ORACLE_URL ?? 'http://localhost:8080';
+const SEPOLIA_TX_BASE = 'https://sepolia.etherscan.io/tx/';
 
 type WsMessage =
   | { type: 'session_init'; marketId: string; payload: OracleSession }
@@ -45,16 +43,12 @@ type WsMessage =
   | {
       type: 'finalized';
       marketId: string;
-      payload: {
-        outcome: boolean;
-        finalEvidenceCid: string | null;
-        calibrationTxHash: string | null;
-      };
+      payload: { outcome: boolean };
     }
   | {
       type: 'settlement_delivered';
       marketId: string;
-      payload: { userAddress?: string; txHash?: string; payout?: string; isWinner?: boolean };
+      payload: { userAddress?: string; txHash?: string; payout?: string };
     }
   | { type: 'error'; marketId: string; payload: unknown };
 
@@ -85,11 +79,8 @@ function normalizeSessionPayload(
         reputationScore: Number(
           agent.reputationScore ?? agent.reputation ?? 80,
         ),
-        erc8004Id: agent.erc8004Id ? String(agent.erc8004Id) : null,
         status: String(agent.status ?? 'idle') as OracleAgentView['status'],
         vote: typeof agent.vote === 'boolean' ? agent.vote : null,
-        storachaCid: agent.storachaCid ? String(agent.storachaCid) : null,
-        filecoinCid: agent.filecoinCid ? String(agent.filecoinCid) : null,
         attestedAt: agent.attestedAt ? Number(agent.attestedAt) : null,
         reasoning: agent.reasoning ? String(agent.reasoning) : undefined,
         source: agent.source ? String(agent.source) : undefined,
@@ -98,26 +89,8 @@ function normalizeSessionPayload(
     yesVotes: Number(payload.yesVotes ?? 0),
     noVotes: Number(payload.noVotes ?? 0),
     outcome: typeof payload.outcome === 'boolean' ? payload.outcome : null,
-    finalEvidenceCid: payload.finalEvidenceCid
-      ? String(payload.finalEvidenceCid)
-      : null,
-    calibrationTxHash: payload.calibrationTxHash
-      ? String(payload.calibrationTxHash)
-      : payload.calibrationTx
-        ? String(payload.calibrationTx)
-        : null,
-    flowTxHash: payload.flowTxHash
-      ? String(payload.flowTxHash)
-      : payload.flowTx
-        ? String(payload.flowTx)
-        : null,
     sepoliaResolutionSync:
       (payload.sepoliaResolutionSync as OracleSession['sepoliaResolutionSync']) ?? {
-        status: 'idle',
-        txHash: null,
-      },
-    flowResolutionSync:
-      (payload.flowResolutionSync as OracleSession['flowResolutionSync']) ?? {
         status: 'idle',
         txHash: null,
       },
@@ -143,7 +116,7 @@ function normalizeSessionPayload(
             : null,
         message: String(entry.message ?? ''),
         txHash: entry.txHash ? String(entry.txHash) : null,
-        cid: entry.cid ? String(entry.cid) : null,
+        cid: null,
       };
     }),
   };
@@ -353,17 +326,6 @@ function AgentCard({ agent }: { agent: OracleAgentView }) {
         )}
       </div>
 
-      {/* CID strip */}
-      {agent.storachaCid && agent.storachaCid !== 'not-configured' && (
-        <div className="relative mt-2.5 rounded-md border border-white/8 bg-slate-900/80 px-2.5 py-1.5">
-          <span className="font-mono text-[9px] text-slate-600 uppercase tracking-wider">
-            storacha{' '}
-          </span>
-          <span className="font-mono text-[10px] text-slate-400">
-            {shorten(agent.storachaCid, 14, 10)}
-          </span>
-        </div>
-      )}
       {agent.reasoning && (
         <div className="relative mt-2 rounded-md border border-white/8 bg-slate-900/80 px-2.5 py-1.5">
           <span className="font-mono text-[9px] text-slate-600 uppercase tracking-wider">
@@ -387,8 +349,8 @@ function classifyLog(entry: OracleLogEntry): {
   if (
     entry.txHash ||
     m.includes('registry') ||
-    m.includes('calibration') ||
-    m.includes('on-chain')
+    m.includes('on-chain') ||
+    m.includes('sepolia')
   ) {
     return { color: 'text-cyan-300', bg: 'text-cyan-700/60', prefix: 'CHAIN' };
   }
@@ -405,12 +367,9 @@ function classifyLog(entry: OracleLogEntry): {
     };
   }
   if (
-    m.includes('cid') ||
-    m.includes('storacha') ||
-    m.includes('filecoin') ||
-    m.includes('piece') ||
     m.includes('reputation') ||
-    entry.cid
+    m.includes('eip-712') ||
+    m.includes('signed')
   ) {
     return {
       color: 'text-violet-300',
@@ -456,28 +415,16 @@ function LogRow({ entry }: { entry: OracleLogEntry }) {
             {new Date(entry.ts).toLocaleTimeString()}
           </span>
         </div>
-        {(entry.txHash || entry.cid) && (
+        {entry.txHash && (
           <div className="mt-0.5 flex flex-wrap gap-3">
-            {entry.txHash && (
-              <a
-                href={`${CALIBRATION_EXPLORER_TX_BASE}${entry.txHash}`}
-                target="_blank"
-                rel="noreferrer"
-                className="font-mono text-[9px] text-cyan-400 hover:text-cyan-300"
-              >
-                tx:{shorten(entry.txHash, 8, 6)}
-              </a>
-            )}
-            {entry.cid && (
-              <a
-                href={`https://filfox.info/en/search/${entry.cid}`}
-                target="_blank"
-                rel="noreferrer"
-                className="font-mono text-[9px] text-violet-400 hover:text-violet-300"
-              >
-                cid:{shorten(entry.cid, 12, 8)}
-              </a>
-            )}
+            <a
+              href={`${SEPOLIA_TX_BASE}${entry.txHash}`}
+              target="_blank"
+              rel="noreferrer"
+              className="font-mono text-[9px] text-cyan-400 hover:text-cyan-300"
+            >
+              tx:{shorten(entry.txHash, 8, 6)}
+            </a>
           </div>
         )}
       </div>
@@ -595,12 +542,6 @@ export function OracleRoom() {
                   patch.status ?? 'idle',
                 ) as OracleAgentView['status'],
                 vote: typeof patch.vote === 'boolean' ? patch.vote : null,
-                storachaCid: patch.storachaCid
-                  ? String(patch.storachaCid)
-                  : null,
-                filecoinCid: patch.filecoinCid
-                  ? String(patch.filecoinCid)
-                  : null,
                 attestedAt: patch.attestedAt ? Number(patch.attestedAt) : null,
                 reputationScore: Number(
                   patch.reputationScore ?? patch.reputation ?? 80,
@@ -637,7 +578,7 @@ export function OracleRoom() {
                     txHash: logPayload.txHash
                       ? String(logPayload.txHash)
                       : null,
-                    cid: logPayload.cid ? String(logPayload.cid) : null,
+                    cid: null,
                   } satisfies OracleLogEntry,
                 ],
               };
@@ -660,12 +601,7 @@ export function OracleRoom() {
               };
             }
             case 'finalized': {
-              const finalPayload = msg.payload as unknown as {
-                outcome?: boolean;
-                finalEvidenceCid?: string | null;
-                calibrationTxHash?: string | null;
-                calibrationTx?: string | null;
-              };
+              const finalPayload = msg.payload as unknown as { outcome?: boolean };
               return {
                 ...prev,
                 phase: 'finalized',
@@ -673,32 +609,21 @@ export function OracleRoom() {
                   typeof finalPayload.outcome === 'boolean'
                     ? finalPayload.outcome
                     : prev.outcome,
-                finalEvidenceCid:
-                  finalPayload.finalEvidenceCid ?? prev.finalEvidenceCid,
-                calibrationTxHash:
-                  finalPayload.calibrationTxHash ??
-                  finalPayload.calibrationTx ??
-                  prev.calibrationTxHash,
               };
             }
             case 'settlement_delivered': {
               const settlementPayload = msg.payload as unknown as {
                 txHash?: string | null;
                 payout?: string | null;
-                isWinner?: boolean;
               };
-              // Surface payout info outside session so we can render it
               if (settlementPayload.payout !== undefined) {
                 setLastSettlement({
                   payout:   settlementPayload.payout ?? '0',
-                  isWinner: settlementPayload.isWinner ?? false,
+                  isWinner: false,
                   txHash:   settlementPayload.txHash ?? null,
                 });
               }
-              return {
-                ...prev,
-                flowTxHash: settlementPayload.txHash ?? prev.flowTxHash,
-              };
+              return prev;
             }
             default:
               return prev;
@@ -808,36 +733,12 @@ export function OracleRoom() {
     [session],
   );
 
-  const calibrationTxs = useMemo(() => {
-    const seen = new Set<string>();
-    const txs: string[] = [];
-    for (const e of session?.log ?? []) {
-      if (!e.txHash) continue;
-      const m = e.message.toLowerCase();
-      const looksCalibration =
-        m.includes('calibration') ||
-        m.includes('oracleagentregistry') ||
-        m.includes('attestation recorded') ||
-        m.includes('reputation updated');
-      if (!looksCalibration) continue;
-      if (seen.has(e.txHash)) continue;
-      seen.add(e.txHash);
-      txs.push(e.txHash);
-    }
-    return txs;
-  }, [session?.log]);
-
   const phase = session?.phase ?? 'idle';
   const isFinalized = phase === 'finalized';
   const isLive =
     phase === 'collecting' ||
-    phase === 'quorum_reached' ||
-    phase === 'uploading';
+    phase === 'quorum_reached';
   const sepoliaSync = session?.sepoliaResolutionSync ?? {
-    status: 'idle' as const,
-    txHash: null,
-  };
-  const flowSync = session?.flowResolutionSync ?? {
     status: 'idle' as const,
     txHash: null,
   };
@@ -1163,108 +1064,42 @@ export function OracleRoom() {
 
         {/* ── Right Sidebar ────────────────────────────────────────────────── */}
         <div className="space-y-5">
-          {/* ── Proof & Chain Links ─────────────────────────────────────────── */}
+          {/* ── Chain Links ─────────────────────────────────────────────────── */}
           <div className="rounded-2xl border border-white/8 bg-slate-950/85 p-5">
             <div className="mb-4 flex items-center gap-2">
               <Fingerprint className="h-4 w-4 text-slate-300" />
               <h2 className="text-sm font-semibold text-white">
-                Proof & Chain Links
+                On-Chain Links
               </h2>
             </div>
             <div className="space-y-3">
               <HashRow
-                label="Piece CID · Filecoin"
+                label="EAMM Resolution TX · Sepolia"
                 icon={Database}
-                value={session?.finalEvidenceCid}
+                value={sepoliaSync.txHash}
                 href={
-                  session?.finalEvidenceCid
-                    ? `https://filfox.info/en/search/${session.finalEvidenceCid}`
+                  sepoliaSync.txHash
+                    ? `${SEPOLIA_TX_BASE}${sepoliaSync.txHash}`
                     : undefined
                 }
-                copyKey="cid"
+                copyKey="sepoliaTx"
                 copied={copied}
                 onCopy={copy}
               />
-              <HashRow
-                label="Calibration Registry TX"
-                icon={Database}
-                value={
-                  session?.calibrationTxHash ?? calibrationTxs.at(-1) ?? null
-                }
-                href={
-                  (session?.calibrationTxHash ?? calibrationTxs.at(-1))
-                    ? `${CALIBRATION_EXPLORER_TX_BASE}${session?.calibrationTxHash ?? calibrationTxs.at(-1)}`
-                    : undefined
-                }
-                copyKey="calTx"
-                copied={copied}
-                onCopy={copy}
-              />
-              {calibrationTxs.length > 1 && (
-                <div className="rounded-xl border border-white/8 bg-slate-950/90 p-3.5">
-                  <div className="mb-2 flex items-center gap-1.5">
-                    <Database className="h-3 w-3 text-slate-600" />
-                    <span className="font-mono text-[9px] font-semibold tracking-widest text-slate-600 uppercase">
-                      Calibration TXs ({calibrationTxs.length})
-                    </span>
-                  </div>
-                  <div className="max-h-28 space-y-1 overflow-auto">
-                    {calibrationTxs
-                      .slice(-6)
-                      .reverse()
-                      .map((tx) => (
-                        <a
-                          key={tx}
-                          href={`${CALIBRATION_EXPLORER_TX_BASE}${tx}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="block font-mono text-[10px] text-cyan-400 hover:text-cyan-300"
-                        >
-                          {shorten(tx, 12, 10)}
-                        </a>
-                      ))}
+              {lastSettlement && (
+                <div className="rounded-lg border border-white/6 bg-slate-950/60 px-3 py-2">
+                  <p className="font-mono text-[10px] text-slate-500 leading-relaxed">
+                    Oracle signed EIP-712 settlement. User claims payout from
+                    GhostVault.claimPayout() on Sepolia.
+                  </p>
+                  <div className="mt-1.5 flex items-center gap-2 font-mono text-[11px] text-emerald-300">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />
+                    {Number(lastSettlement.payout) > 0
+                      ? `+${(Number(lastSettlement.payout) / 1e18).toFixed(4)} ETH claimable`
+                      : 'settlement signed'}
                   </div>
                 </div>
               )}
-              <div className="space-y-1.5">
-                <HashRow
-                  label="Vault Credit TX"
-                  icon={Zap}
-                  value={session?.flowTxHash}
-                  href={
-                    session?.flowTxHash
-                      ? `https://evm-testnet.flowscan.io/tx/${session.flowTxHash}`
-                      : undefined
-                  }
-                  copyKey="flowTx"
-                  copied={copied}
-                  onCopy={copy}
-                />
-                {session?.flowTxHash && (
-                  <div className="rounded-lg border border-white/6 bg-slate-950/60 px-3 py-2">
-                    <p className="font-mono text-[10px] text-slate-500 leading-relaxed">
-                      This tx updates vault accounting (no FLOW transfer occurs on-chain).
-                      Payout is credited to the user&apos;s vault balance.
-                    </p>
-                    {lastSettlement && (
-                      <div className={cn(
-                        'mt-1.5 flex items-center gap-2 font-mono text-[11px]',
-                        lastSettlement.isWinner ? 'text-emerald-300' : 'text-rose-300',
-                      )}>
-                        <span className={cn(
-                          'h-1.5 w-1.5 rounded-full shrink-0',
-                          lastSettlement.isWinner ? 'bg-emerald-400' : 'bg-rose-400',
-                        )} />
-                        {lastSettlement.isWinner
-                          ? `+${Number(lastSettlement.payout) > 0
-                              ? (Number(lastSettlement.payout) / 1e18).toFixed(4)
-                              : '0'} FLOW credited`
-                          : 'lock released (losing position)'}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
             </div>
           </div>
 
@@ -1389,46 +1224,15 @@ export function OracleRoom() {
                   {sepoliaSync.status}
                 </span>
               </div>
-              <div className="flex items-center justify-between rounded-lg border border-white/8 bg-slate-950/90 px-3 py-2">
-                <span className="text-slate-500">Flow (mirrored)</span>
-                <span
-                  className={cn(
-                    flowSync.status === 'synced' && 'text-emerald-300',
-                    flowSync.status === 'pending' && 'text-amber-300',
-                    flowSync.status === 'failed' && 'text-rose-300',
-                    flowSync.status === 'skipped' && 'text-slate-400',
-                    flowSync.status === 'idle' && 'text-slate-500',
-                  )}
-                >
-                  {flowSync.status}
-                </span>
-              </div>
             </div>
-            {(sepoliaSync.txHash || flowSync.txHash) && (
+            {sepoliaSync.txHash && (
               <div className="mt-3 space-y-2">
                 <HashRow
                   label="Sepolia resolve TX"
                   icon={Activity}
                   value={sepoliaSync.txHash}
-                  href={
-                    sepoliaSync.txHash
-                      ? `https://sepolia.etherscan.io/tx/${sepoliaSync.txHash}`
-                      : undefined
-                  }
+                  href={`${SEPOLIA_TX_BASE}${sepoliaSync.txHash}`}
                   copyKey="sepoliaResolveTx"
-                  copied={copied}
-                  onCopy={copy}
-                />
-                <HashRow
-                  label="Flow resolve TX"
-                  icon={Activity}
-                  value={flowSync.txHash}
-                  href={
-                    flowSync.txHash
-                      ? `https://evm-testnet.flowscan.io/tx/${flowSync.txHash}`
-                      : undefined
-                  }
-                  copyKey="flowResolveTx"
                   copied={copied}
                   onCopy={copy}
                 />

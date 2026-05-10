@@ -1,4 +1,4 @@
-export type MarketStatus = 'active' | 'resolved' | 'disputed' | 'pending';
+export type MarketStatus = 'active' | 'resolved' | 'cancelled' | 'disputed' | 'pending';
 
 export type MarketCategory =
   | 'Crypto'

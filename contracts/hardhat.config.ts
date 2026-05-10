@@ -11,8 +11,6 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY ?? '';
-const SEPOLIA_PRIVATE_KEY =
-  process.env.SEPOLIA_PRIVATE_KEY ?? DEPLOYER_PRIVATE_KEY;
 
 const config: HardhatUserConfig = {
   solidity: {
@@ -29,56 +27,25 @@ const config: HardhatUserConfig = {
     // Run tests: npx hardhat test --network hardhat
     hardhat: {},
 
-    // ── Flow EVM Testnet — GhostVault + GhostMarket ─────────────────────────
-    flowTestnet: {
-      url: 'https://testnet.evm.nodes.onflow.org',
-      chainId: 545,
-      accounts: DEPLOYER_PRIVATE_KEY ? [DEPLOYER_PRIVATE_KEY] : [],
-    },
-    flowMainnet: {
-      url: 'https://mainnet.evm.nodes.onflow.org',
-      chainId: 747,
-      accounts: DEPLOYER_PRIVATE_KEY ? [DEPLOYER_PRIVATE_KEY] : [],
-    },
-
-    // ── Ethereum Sepolia — GhostEAMM (Zama fhevm) ───────────────────────────
-    // Zama Protocol is NOT its own chain. It runs on Ethereum Sepolia.
-    // ZamaEthereumConfig in GhostEAMM.sol wires the contract to the Sepolia
-    // FHEVM gateway automatically.
+    // ── Ethereum Sepolia ─────────────────────────────────────────────────────
+    // All GhostMarket contracts deploy here:
+    //   GhostEAMM.sol    — FHE encrypted AMM (Zama coprocessor)
+    //   GhostVault.sol   — ETH custody + EIP-712 settlement
+    //   GhostMarket.sol  — Public market metadata registry
+    //
     // Faucet:  https://sepoliafaucet.com / https://www.alchemy.com/faucets/ethereum-sepolia
-    // Deploy:  npx hardhat run scripts/deploy-eamm.ts --network sepolia
-    // Tests:   npx hardhat test --network sepolia   (real encryption, slower)
+    // Deploy:  npx hardhat run scripts/deploy-sepolia.ts --network sepolia
+    // Tests:   npx hardhat test --network sepolia   (real FHE encryption, slower)
     sepolia: {
       url: process.env.SEPOLIA_RPC_URL ?? 'https://rpc.sepolia.org',
       chainId: 11155111,
-      accounts: SEPOLIA_PRIVATE_KEY ? [SEPOLIA_PRIVATE_KEY] : [],
+      accounts: DEPLOYER_PRIVATE_KEY ? [DEPLOYER_PRIVATE_KEY] : [],
     },
   },
   etherscan: {
-    // Flowscan does not use a standard etherscan key but the config is kept
-    // for future verification support.
     apiKey: {
-      flowTestnet: 'no-api-key-needed',
-      flowMainnet: 'no-api-key-needed',
+      sepolia: process.env.ETHERSCAN_API_KEY ?? 'no-api-key',
     },
-    customChains: [
-      {
-        network: 'flowTestnet',
-        chainId: 545,
-        urls: {
-          apiURL: 'https://evm-testnet.flowscan.io/api',
-          browserURL: 'https://evm-testnet.flowscan.io',
-        },
-      },
-      {
-        network: 'flowMainnet',
-        chainId: 747,
-        urls: {
-          apiURL: 'https://evm.flowscan.io/api',
-          browserURL: 'https://evm.flowscan.io',
-        },
-      },
-    ],
   },
 };
 

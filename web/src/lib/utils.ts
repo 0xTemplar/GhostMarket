@@ -37,6 +37,8 @@ export function formatDate(iso: string): string {
 }
 
 export function formatTimeRemaining(iso: string): string {
+  // Return empty string during SSR to avoid server/client timestamp mismatch.
+  if (typeof window === 'undefined') return '';
   const now = new Date();
   const expiry = new Date(iso);
   const diff = expiry.getTime() - now.getTime();
