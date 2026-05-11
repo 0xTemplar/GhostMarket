@@ -13,6 +13,13 @@ dotenv.config();
 const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY ?? '';
 
 const config: HardhatUserConfig = {
+  paths: {
+    // Only compile active contracts — `legacy/` holds archived sources (e.g. GhostVault v1).
+    sources: './contracts/contracts',
+    tests:   './test',
+    cache:   './cache',
+    artifacts: './artifacts',
+  },
   solidity: {
     version: '0.8.26',
     settings: {
@@ -29,9 +36,9 @@ const config: HardhatUserConfig = {
 
     // ── Ethereum Sepolia ─────────────────────────────────────────────────────
     // All GhostMarket contracts deploy here:
-    //   GhostEAMM.sol    — FHE encrypted AMM (Zama coprocessor)
-    //   GhostVault.sol   — ETH custody + EIP-712 settlement
-    //   GhostMarket.sol  — Public market metadata registry
+    //   GhostEAMM.sol      — FHE encrypted AMM (Zama coprocessor)
+    //   GhostVaultV2.sol   — cUSDC (ERC-7984) custody + EIP-712 settlement
+    //   GhostMarket.sol    — Public market metadata registry
     //
     // Faucet:  https://sepoliafaucet.com / https://www.alchemy.com/faucets/ethereum-sepolia
     // Deploy:  npx hardhat run scripts/deploy-sepolia.ts --network sepolia

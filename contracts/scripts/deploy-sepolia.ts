@@ -8,20 +8,22 @@
  * EAMM redeploy (see `scripts/redeploy-eamm.ts`).
  *
  * Deploys all GhostMarket contracts to Ethereum Sepolia in order:
- *   1. Collateral USDC — **by default** Zama’s protocol mock underlying on Sepolia
- *      (`0x9b5Cd13b8eFbB58Dc25A05CF411D8056058aDFfF`, public `mint`, 6 decimals; see
- *      https://docs.zama.org/protocol/protocol-apps/addresses/testnet/sepolia).
- *      Set `USE_ZAMA_SEPOLIA_MOCK_USDC=0` to deploy a fresh repo `MockUSDC.sol` instead
- *      (isolated addresses, not the Zama-listed token).
+ *   1. Collateral addresses — Zama’s protocol mock **underlying** USDC on Sepolia
+ *      (`0x9b5Cd13b8eFbB58Dc25A05CF411D8056058aDFfF`) and **cUSDCMock** wrapper; see
+ *      https://docs.zama.org/protocol/protocol-apps/addresses/testnet/sepolia.
+ *      The script does **not** mint tokens — fund test wallets yourself (e.g. call
+ *      `mint` on the mock underlying from your deployer wallet if you need USDC).
  *   2. GhostEAMM    — FHE-encrypted AMM (Zama FHEVM coprocessor)
- *   3. GhostVault  — USDC custody + EIP-712 oracle-signed settlement
+ *   3. GhostVaultV2 — ERC-7984 cUSDC custody (matches `web` vault page). Collateral is
+ *      Zama **cUSDCMock** (`0x7c5BF…`). Requires `USE_ZAMA_SEPOLIA_MOCK_USDC=1` (default);
+ *      plaintext GhostVault v1 is archived under `contracts/legacy/` and is not deployed.
  *   4. GhostMarket — Public market metadata registry (constructor wires `eamm`)
  *
  * Usage:
  *   npx hardhat run scripts/deploy-sepolia.ts --network sepolia
  *
  * Required env vars (contracts/.env):
- *   DEPLOYER_PRIVATE_KEY          — deployer wallet (also becomes MockUSDC owner)
+ *   DEPLOYER_PRIVATE_KEY          — deployer wallet (pays gas)
  *   ORACLE_PRIVATE_KEY            — oracle wallet (initial EAMM manager/resolver;
  *                                   GhostMarket is wired as manager+resolver next)
  *   SEPOLIA_RPC_URL               — Alchemy / Infura Sepolia endpoint
@@ -39,8 +41,7 @@
  * Then restart `oracle` and `web` dev servers so they reload env.
  *
  * Seeding (optional, after deploy):
- *   npx hardhat run scripts/seed-usdc.ts --network sepolia
- *   (mints USDC to seeder wallet and calls GhostVault.depositFor to pre-fund markets)
+ *   (See repo `scripts/seed-*.ts` if present — paths vary.)
  */
 
 import hre from 'hardhat';
@@ -52,9 +53,6 @@ const ZAMA_SEPOLIA_MOCK_USDC_UNDERLYING =
 
 /** Zama protocol — Confidential USDC (Mock) wrapper for the underlying above. */
 const ZAMA_SEPOLIA_CUSDC_MOCK = '0x7c5BF43B851c1dff1a4feE8dB225b87f2C223639';
-
-// 1 million USDC minted to the deployer for seeding / testing.
-const SEED_AMOUNT = ethers.parseUnits('1000000', 6);
 
 /** Use Zama’s canonical mock USDC unless explicitly disabled (`0` / `false`). */
 function useZamaSepoliaMockUsdc(): boolean {
@@ -76,7 +74,7 @@ async function main() {
   console.log(`Oracle   : ${oracleAddress}`);
   console.log(`Network  : ${hre.network.name} (chainId ${hre.network.config.chainId})\n`);
 
-  // ── 1. Collateral USDC (Zama canonical mock underlying, or fresh MockUSDC) ─
+  // ── 1. Collateral addresses (Zama mock underlying — env reference only) ───
   let usdcAddress: string;
 
   if (useZamaSepoliaMockUsdc()) {
@@ -84,25 +82,15 @@ async function main() {
     console.log('Using Zama protocol mock USDC (Sepolia underlying for cUSDCMock)');
     console.log(`  Docs: https://docs.zama.org/protocol/protocol-apps/addresses/testnet/sepolia`);
     console.log(`  Underlying: ${usdcAddress}`);
-    const mintable = new ethers.Contract(
-      usdcAddress,
-      ['function mint(address to, uint256 amount) external'],
-      deployer,
+    console.log(
+      '  (No deploy-time mint — call `mint` on that token from your wallet if you need test USDC.)\n',
     );
-    const mintTx = await mintable.mint(deployer.address, SEED_AMOUNT);
-    await mintTx.wait();
-    console.log(`  Minted 1,000,000 USDC (6 decimals) to ${deployer.address}\n`);
   } else {
-    console.log('Deploying local MockUSDC.sol (USE_ZAMA_SEPOLIA_MOCK_USDC=0)…');
-    const MockUSDC = await ethers.getContractFactory('MockUSDC');
-    const usdc = await MockUSDC.deploy(deployer.address);
-    await usdc.waitForDeployment();
-    usdcAddress = await usdc.getAddress();
-    console.log(`MockUSDC deployed   : ${usdcAddress}`);
-    console.log(`  Etherscan: https://sepolia.etherscan.io/address/${usdcAddress}`);
-    const mintTx = await usdc.mint(deployer.address, SEED_AMOUNT);
-    await mintTx.wait();
-    console.log(`  Minted 1,000,000 USDC to ${deployer.address}\n`);
+    throw new Error(
+      'USE_ZAMA_SEPOLIA_MOCK_USDC=0 is disabled: local MockUSDC + plaintext GhostVault v1 ' +
+        'is no longer in this repo’s workflow. Remove USE_ZAMA_SEPOLIA_MOCK_USDC or set it to 1 ' +
+        '(Zama Sepolia mock underlying + cUSDCMock + GhostVaultV2). Legacy v1 is in contracts/legacy/.',
+    );
   }
 
   // ── 2. GhostEAMM ───────────────────────────────────────────────────────────
@@ -117,16 +105,14 @@ async function main() {
   console.log(`GhostEAMM deployed  : ${eammAddress}`);
   console.log(`  Etherscan: https://sepolia.etherscan.io/address/${eammAddress}\n`);
 
-  // ── 3. GhostVault ──────────────────────────────────────────────────────────
-  console.log('Deploying GhostVault...');
-  const GhostVault = await ethers.getContractFactory('GhostVault');
-  const vault = await GhostVault.deploy(
-    usdcAddress,   // collateral (Zama mock underlying or freshly deployed MockUSDC)
-    oracleAddress, // settlementSigner = oracle wallet
-  );
+  // ── 3. GhostVaultV2 (cUSDC collateral — matches web vault + oracle EIP-712 v2) ─
+  console.log('Deploying GhostVaultV2 (collateral = Zama cUSDCMock)…');
+  const GhostVaultV2 = await ethers.getContractFactory('GhostVaultV2');
+  const vault = await GhostVaultV2.deploy(ZAMA_SEPOLIA_CUSDC_MOCK, oracleAddress);
   await vault.waitForDeployment();
   const vaultAddress = await vault.getAddress();
-  console.log(`GhostVault deployed : ${vaultAddress}`);
+  console.log(`GhostVaultV2 deployed: ${vaultAddress}`);
+  console.log(`  Collateral (cUSDC): ${ZAMA_SEPOLIA_CUSDC_MOCK}`);
   console.log(`  Etherscan: https://sepolia.etherscan.io/address/${vaultAddress}\n`);
 
   // ── 4. GhostMarket ─────────────────────────────────────────────────────────
@@ -179,9 +165,10 @@ async function main() {
   if (rpc) console.log(`NEXT_PUBLIC_SEPOLIA_RPC_URL=${rpc}`);
   console.log('');
   console.log('Checklist:');
+  console.log('  [ ] Oracle EIP-712 uses GhostVault domain version `2` (GhostVaultV2; default in oracle/src/oracle-signer.ts)');
   console.log('  [ ] Paste addresses into contracts/.env, oracle/.env, web/.env.local');
+  console.log('  [ ] Fund test USDC yourself (Zama mock underlying `mint` per docs) before vault deposit');
   console.log('  [ ] Restart oracle (`npm run dev` in oracle/) and web dev server');
-  console.log('  [ ] Optional: npx hardhat run scripts/seed-usdc.ts --network sepolia');
   console.log('  [ ] Demo: npx hardhat run scripts/demo-sealed-window.ts --network sepolia');
 }
 

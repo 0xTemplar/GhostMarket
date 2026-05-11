@@ -19,10 +19,11 @@ import { getSepoliaOraclePrivateKey } from './sepolia-keys';
 const SEPOLIA_RPC_URL     = process.env.SEPOLIA_RPC_URL ?? 'https://rpc.sepolia.org';
 const GHOST_VAULT_ADDRESS = process.env.GHOST_VAULT_ADDRESS ?? '';
 
-// ── EIP-712 domain + typehash — must match GhostVault.sol exactly ─────────────
+// ── EIP-712 domain + typehash — must match GhostVault / GhostVaultV2 on-chain ─
 
 const DOMAIN_NAME    = 'GhostVault';
-const DOMAIN_VERSION = '1';
+/** Must match deployed vault: `2` for GhostVaultV2, `1` for legacy GhostVault. */
+const DOMAIN_VERSION = process.env.GHOST_VAULT_EIP712_VERSION?.trim() || '2';
 const CHAIN_ID       = 11155111; // Ethereum Sepolia
 
 const CLAIM_TYPE = {
