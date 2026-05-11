@@ -1,739 +1,517 @@
-<div align="center">
+<!-- Header -->
+<p align="center">
+  <img src="https://img.shields.io/badge/%F0%9F%91%BB%20GhostMarket-Confidential%20Prediction%20Markets-7C3AED?style=for-the-badge&labelColor=0f0f1a" alt="GhostMarket" height="60" />
+</p>
 
-# GhostMarket
+<p align="center">
+  <img src="https://img.shields.io/badge/Zama-FHEVM-412891?style=for-the-badge" alt="FHEVM" />
+  <img src="https://img.shields.io/badge/ERC--7984-Confidential%20Token-1a73e8?style=for-the-badge" alt="ERC-7984" />
+  <img src="https://img.shields.io/badge/Ethereum-Sepolia-627EEA?style=for-the-badge&logo=ethereum&logoColor=white" alt="Sepolia" />
+  <img src="https://img.shields.io/badge/Privy-Walletless%20Login-7C3AED?style=for-the-badge" alt="Privy" />
+</p>
 
-**Confidential Prediction Markets on Ethereum, end-to-end encrypted with Zama FHEVM and ERC-7984.**
+<h1 align="center">GhostMarket</h1>
 
-[![Ethereum Sepolia](https://img.shields.io/badge/Ethereum-Sepolia_11155111-627EEA?style=flat-square&logo=ethereum)](https://sepolia.etherscan.io)
-[![Zama FHEVM](https://img.shields.io/badge/Zama-FHEVM_protocol-412891?style=flat-square)](https://docs.zama.ai/fhevm)
-[![ERC-7984](https://img.shields.io/badge/ERC--7984-confidential_token-1a73e8?style=flat-square)](https://eips.ethereum.org/EIPS/eip-7984)
-[![Privy](https://img.shields.io/badge/Privy-walletless_login-7c3aed?style=flat-square)](https://privy.io)
-[![License](https://img.shields.io/badge/License-MIT-gray?style=flat-square)](LICENSE)
+<p align="center">
+  <strong>Every deposit, every bet, every payout — a ciphertext from browser to blockchain.</strong><br/>
+  <em>The chain knows you bet. It does not know on what, in what size, or for how much.</em>
+</p>
 
-<img width="1920" height="1080" alt="GhostMarket hero" src="https://github.com/user-attachments/assets/4c3e3305-9ec8-4e7d-9d2e-beccaa48b92c" />
-
-*Your deposit, your stake, your pool share, your payout — none of them exist as plaintext anywhere on-chain.*
-
-</div>
+<p align="center">
+  <a href="#-what-it-is"><img src="https://img.shields.io/badge/-What%20It%20Is-7C3AED?style=flat-square" /></a>&nbsp;
+  <a href="#-architecture"><img src="https://img.shields.io/badge/-Architecture-412891?style=flat-square" /></a>&nbsp;
+  <a href="#-privacy-model"><img src="https://img.shields.io/badge/-Privacy%20Model-EF4444?style=flat-square" /></a>&nbsp;
+  <a href="#-encrypted-stack"><img src="https://img.shields.io/badge/-Encrypted%20Stack-3B82F6?style=flat-square" /></a>&nbsp;
+  <a href="#-oracle-agent-quorum"><img src="https://img.shields.io/badge/-Oracle%20AI%20Quorum-F59E0B?style=flat-square" /></a>&nbsp;
+  <a href="#-deployed-contracts"><img src="https://img.shields.io/badge/-Contracts-22c55e?style=flat-square" /></a>&nbsp;
+  <a href="#-running-locally"><img src="https://img.shields.io/badge/-Run%20Locally-06B6D4?style=flat-square" /></a>
+</p>
 
 ---
 
 ## Table of Contents
 
-- [What GhostMarket Is](#what-ghostmarket-is)
-- [The Problem](#the-problem)
-- [What We Built](#what-we-built)
-- [System Architecture](#system-architecture)
-- [Privacy Model — What's Public, What's Encrypted](#privacy-model--whats-public-whats-encrypted)
-- [The Encrypted Stack, in Depth](#the-encrypted-stack-in-depth)
-  - [1. ERC-7984 cUSDC Custody](#1-erc-7984-cusdc-custody--encrypted-money-on-rails)
-  - [2. GhostEAMM — Encrypted AMM](#2-ghosteamm--encrypted-amm)
-  - [3. Sealed-Bid Windows](#3-sealed-bid-windows--time-batched-frontrun-proof-price-reveal)
-  - [4. Oracle Room — AI Agent Quorum](#4-oracle-room--ai-agent-quorum)
-  - [5. Confidential Settlement](#5-confidential-settlement--signing-over-ciphertext-handles)
-  - [6. Walletless Onboarding](#6-walletless-onboarding-via-privy)
-- [End-to-End User Journey](#end-to-end-user-journey)
-- [Compliance Model](#compliance-model)
-- [Deployed Contracts (Sepolia)](#deployed-contracts-sepolia)
-- [Repository Layout](#repository-layout)
-- [Running Locally](#running-locally)
-- [Testing](#testing)
-- [Operational Notes](#operational-notes)
-- [Roadmap](#roadmap)
+- [What It Is](#-what-it-is)
+  - [Problems Solved](#problems-solved)
+- [Architecture](#-architecture)
+- [Privacy Model](#-privacy-model)
+- [Encrypted Stack](#-encrypted-stack)
+  - [1. ERC-7984 Confidential Vault](#1-erc-7984-confidential-vault)
+  - [2. Encrypted AMM](#2-encrypted-amm)
+  - [3. Sealed-Bid Windows](#3-sealed-bid-windows)
+  - [4. Confidential Settlement](#4-confidential-settlement)
+- [Oracle Agent Quorum](#-oracle-agent-quorum)
+- [User Journey](#-user-journey)
+- [Deployed Contracts](#-deployed-contracts)
+- [Repository Layout](#-repository-layout)
+- [Running Locally](#-running-locally)
+- [Tests](#-tests)
+- [Operational Notes](#-operational-notes)
+
+<p align="center">
+  <img width="1920" height="1080" alt="GhostMarket hero" src="https://github.com/user-attachments/assets/4c3e3305-9ec8-4e7d-9d2e-beccaa48b92c" />
+</p>
 
 ---
 
-## What GhostMarket Is
+## 👻 What It Is
 
-GhostMarket is a **fully confidential prediction-market protocol** deployed on **Ethereum Sepolia** with the Zama FHEVM coprocessor. It is not a privacy *layer* bolted on top of a public market — it is a market where **every value that has a dollar sign in front of it is a ciphertext from the moment it leaves the user's browser until the moment it lands in their wallet on the other side**.
+GhostMarket is a binary prediction market where **no financial value ever exists as plaintext on-chain.** Not deposits. Not pool totals. Not bet sizes. Not payouts. Every value is an `euint64` ciphertext processed by the [Zama FHEVM](https://docs.zama.ai/fhevm) coprocessor on Ethereum Sepolia.
 
-That includes:
+The ERC-7984 cUSDC token holding all collateral literally cannot answer the question "how much does this user own?" The oracle signs over an *encrypted handle*, not a `uint256`. Two users can place bets in the same window and neither can infer the other's size from a price delta — because the price is frozen until the window closes.
 
-- **Vault deposits and balances** — held as encrypted ERC-7984 cUSDC. The token contract literally cannot tell you how much cUSDC anyone owns.
-- **Per-market collateral locks** — encrypted on a per-user, per-market basis. Even the vault owner can't read them.
-- **Bet amounts** — encrypted client-side before they hit calldata, processed by the FHE coprocessor.
-- **Pool depths (YES / NO totals)** — encrypted in the AMM. Decrypted only after a sealed-bid window settles, and only to authorised addresses.
-- **Per-user position shares** — encrypted, ACL-scoped to the position owner.
-- **Payouts** — the oracle signs over the *encrypted* payout handle, not a plaintext amount. The vault transfers cUSDC by handle; the recipient receives confidential tokens; the explorer sees nothing.
+Combined with a **sealed-bid window** mechanism, a **7-agent AI oracle quorum** grounded in live exchange feeds, and **Privy walletless login**, this is what Polymarket would look like if the chain refused to publish your size.
 
-Combined with a **sealed-bid window** mechanism that freezes the visible odds during a buying window (so two bettors can't watch each other's clicks move the price), a **4-of-N AI agent oracle quorum** with reasoning grounded in real exchange APIs, and **walletless Privy login**, GhostMarket is what Polymarket would look like if the chain refused to publish your size.
+### Problems Solved
 
----
-
-## The Problem
-
-### 1. Public order books are an attack surface
-
-On every major on-chain prediction market today, every trade is visible in real time at base-unit precision. Bet sizes leak intent, invite front-running, allow whale-watching, and make adverse selection trivial. "Transparency" of execution detail is not a feature for the trader — it is a feature for the people trading against them.
-
-### 2. "Hidden" usually means hidden behind a centralised operator
-
-The handful of markets that obscure trade size do so by routing through a trusted backend that holds plaintext internally. The privacy isn't cryptographic; it's "we promise we won't tell." Anyone who compromises the operator, or anyone who *is* the operator, can read everything.
-
-### 3. Oracles are a single point of failure
-
-Most testnet and even production markets resolve from a single feed. There's no quorum, no attestation chain, no way to audit what the oracle "saw" when it decided your bet lost.
-
-### 4. Web3 onboarding is a brick wall
-
-Seed phrases, faucet runs, gas tokens, and wallet pop-ups will continue to kill mainstream adoption for the foreseeable future.
+| Problem | Solution | Mechanism |
+|:--------|:---------|:----------|
+| ![](https://img.shields.io/badge/-Bet%20Size%20Leakage-EF4444?style=flat-square) | FHE encryption of every value | `euint64` ciphertexts in calldata, storage, events, and settlements |
+| ![](https://img.shields.io/badge/-Trust--Based%20Privacy-EF4444?style=flat-square) | Cryptographic ACL — no master key | Zama KMS re-encryption; nobody can read another user's position |
+| ![](https://img.shields.io/badge/-Probe--Bet%20Front--Running-F59E0B?style=flat-square) | Sealed-bid windows | Pool ACL withheld during window; all bets revealed atomically |
+| ![](https://img.shields.io/badge/-Single--Oracle%20Risk-F59E0B?style=flat-square) | 7-agent AI quorum | Each agent fetches a live CEX API, reasons via gpt-4o-mini, votes independently |
+| ![](https://img.shields.io/badge/-Oracle%20Forging%20Payouts-EF4444?style=flat-square) | Settlement over encrypted handle | Oracle signs `keccak(user, marketId, amountHandle, nonce, expiry)` |
+| ![](https://img.shields.io/badge/-Visible%20Collateral-3B82F6?style=flat-square) | ERC-7984 cUSDC custody | All balances and locks are `euint64` in `GhostVaultV2` |
+| ![](https://img.shields.io/badge/-Seed--Phrase%20Friction-8B5CF6?style=flat-square) | Privy embedded wallets | Google / email / passkey login — no mnemonic, no extension |
 
 ---
 
-## What We Built
+## 🏗 Architecture
 
-| Problem | GhostMarket's answer | Mechanism |
-|---|---|---|
-| Bet-size leakage to other traders | **End-to-end FHE encryption of every value** | `euint64` ciphertexts in calldata, storage, events, and settlements — verified by Zama coprocessor |
-| Trust-based privacy | **Cryptographic privacy, no trusted operator** | ACL-gated re-encryption via Zama KMS; nobody (us included) has a master key |
-| Pool-depth front-running during a bet | **Sealed-bid windows** | Pool handles snapshotted at window open, decryption ACL not granted until window expires |
-| Single-feed oracle risk | **Multi-agent oracle with on-chain attestation** | N independent LLM agents pulling different exchange feeds, majority quorum, EIP-712-signed settlement |
-| Oracle forging payout amounts | **Settlement commits to encrypted handle, not amount** | Oracle signs `keccak(user, marketId, amountHandle, nonce, expiry)`; vault transfers by handle |
-| Seed-phrase friction | **Walletless login** | Privy embedded wallets — Google / email / passkey, no mnemonic |
-| Cross-chain bridge risk | **Single chain** | All contracts live on Ethereum Sepolia (mainnet-ready with one address swap) |
+```mermaid
+graph TB
+    subgraph Browser["🌐 Browser"]
+        direction LR
+        FE["<b>Next.js 15</b><br/>React 19 · Tailwind v4 · viem"]
+        SDK["<b>@zama-fhe/relayer-sdk</b><br/>encrypt(amount) → (handle, ZKPoK)"]
+        PV["<b>Privy v3</b><br/>Embedded EOA · Google/Email/Passkey"]
+    end
 
----
+    subgraph Contracts["⛓️ Ethereum Sepolia (chainId 11155111)"]
+        direction LR
+        GM["<b>GhostMarket</b><br/>Metadata registry<br/>Lifecycle entry point"]
+        EAMM["<b>GhostEAMM</b><br/>Encrypted AMM<br/>YES/NO euint64 pools<br/>Sealed-bid windows"]
+        VLT["<b>GhostVaultV2</b><br/>ERC-7984 cUSDC custody<br/>EIP-712 settlement"]
+        CUSDC["<b>cUSDC Mock</b><br/>ERC-7984 confidential token<br/>Zama canonical Sepolia"]
+    end
 
-## System Architecture
+    subgraph Oracle["🤖 Oracle Service (Node.js · port 8092)"]
+        direction LR
+        AGT["<b>7 AI Agents</b><br/>Cipher · Specter · Wraith · Phantom<br/>Shade · Echo · Vex"]
+        WATCHER["<b>Sealed-Window Watcher</b><br/>Settle → Zama KMS decrypt<br/>→ publishWindowPrice"]
+        SIGNER["<b>Oracle Signer</b><br/>EIP-712 Claim(amountHandle)"]
+    end
 
-```
-                              ┌──────────────────────────────────────┐
-                              │            USER (browser)            │
-                              │  Next.js · viem · Privy embedded EOA │
-                              └──────────────┬───────────────────────┘
-                                             │
-                                             │ @zama-fhe/relayer-sdk (browser)
-                                             │ encrypts amount + builds ZKPoK
-                                             │
-                ┌────────────────────────────┼────────────────────────────┐
-                │                            │                            │
-                ▼                            ▼                            ▼
-        ┌───────────────┐           ┌──────────────────┐         ┌────────────────┐
-        │  cUSDC Mock   │           │  GhostVaultV2    │         │   GhostEAMM    │
-        │  (ERC-7984)   │           │  encrypted USDC  │         │  encrypted AMM │
-        │  Zama Sepolia │◄──────────┤  custody + EIP-  │◄────────┤  YES/NO pools  │
-        │  canonical    │ confiden- │  712 settlement  │ shared  │  + sealed-bid  │
-        └───────┬───────┘ tialTrans │  signer          │ marketId│  windows       │
-                │         fer       └────────┬─────────┘ space   └────────┬───────┘
-                │                            │                            │
-                │                            │                            │
-                │              ┌─────────────┴────────────────────────────┘
-                │              │
-                │              ▼
-                │     ┌────────────────┐
-                │     │  GhostMarket   │  ← single admin entry point
-                │     │  metadata +    │     createMarket / resolve / cancel /
-                │     │  lifecycle     │     openSealedWindow forward to EAMM
-                │     └───────┬────────┘
-                │             │
-                │             │ resolveMarket(outcome) on quorum
-                │             │
-                │   ┌─────────┴──────────────────────────────────────┐
-                │   │              Oracle Service (Node.js)          │
-                │   │  WS + REST · http://localhost:8092             │
-                │   │  ┌──────────────────────────────────────────┐  │
-                │   │  │  N agents (default 4, definitions = 7)   │  │
-                │   │  │  ├─ Cipher    (Binance)                  │  │
-                │   │  │  ├─ Specter   (CoinGecko)                │  │
-                │   │  │  ├─ Wraith    (Chainlink / CryptoCompare)│  │
-                │   │  │  ├─ Phantom   (Coinbase)                 │  │
-                │   │  │  ├─ Shade     (Kraken)                   │  │
-                │   │  │  ├─ Echo      (OKX)                      │  │
-                │   │  │  └─ Vex       (Bybit)                    │  │
-                │   │  │                                          │  │
-                │   │  │  Each agent: fetch live price → reason   │  │
-                │   │  │  via OpenAI (gpt-4o-mini) → cast vote    │  │
-                │   │  └──────────────────────────────────────────┘  │
-                │   │                                                │
-                │   │  ▸ floor(N/2)+1 quorum → resolveMarket on EAMM │
-                │   │  ▸ Zama gateway userDecrypt of position       │
-                │   │  ▸ EIP-712 sign Claim(user, marketId,         │
-                │   │      amountHandle, nonce, expiry)             │
-                │   │  ▸ sealed-window watcher: settle + decrypt    │
-                │   │      + publishWindowPrice on expiry           │
-                │   └────────────────────────────────────────────────┘
-                │
-                ▼
-        confidentialTransfer back to user (ERC-7984 cUSDC).
-        Calldata, events, balances — all ciphertext.
+    FE --> SDK
+    FE --> PV
+    SDK --> EAMM
+    SDK --> VLT
+    GM --> EAMM
+    VLT --> CUSDC
+    AGT --> GM
+    AGT --> SIGNER
+    WATCHER --> EAMM
+    SIGNER --> VLT
+
+    style Browser fill:transparent,stroke:#7c3aed,color:#333
+    style Contracts fill:transparent,stroke:#3b82f6,color:#333
+    style Oracle fill:transparent,stroke:#f59e0b,color:#333
+    style FE fill:#7c3aed,stroke:#a78bfa,color:#fff
+    style SDK fill:#412891,stroke:#7c3aed,color:#fff
+    style PV fill:#8b5cf6,stroke:#a78bfa,color:#fff
+    style GM fill:#64748b,stroke:#94a3b8,color:#fff
+    style EAMM fill:#3b82f6,stroke:#60a5fa,color:#fff
+    style VLT fill:#22c55e,stroke:#4ade80,color:#000
+    style CUSDC fill:#06b6d4,stroke:#22d3ee,color:#000
+    style AGT fill:#f59e0b,stroke:#fbbf24,color:#000
+    style WATCHER fill:#ef4444,stroke:#f87171,color:#fff
+    style SIGNER fill:#f59e0b,stroke:#fbbf24,color:#000
 ```
 
-Everything is on **Ethereum Sepolia (chainId 11155111)**. There is no cross-chain bridge, no L2 hop, no offchain order book.
+### End-to-End Payout Flow
+
+```mermaid
+graph LR
+    A["👤 User encrypts<br/>amount in browser"] --> B["🔒 cUSDC.setOperator<br/>+ GhostVaultV2.deposit"]
+    B --> C["🏦 euint64 balance<br/>in vault"]
+    C --> D["🎯 lockForBet +<br/>placeBet (FHE.add)"]
+    D --> E["🪟 Sealed window<br/>pool frozen"]
+    E --> F["⏰ Window expires<br/>→ PriceRevealed"]
+    F --> G["🤖 Oracle quorum<br/>resolveMarket on-chain"]
+    G --> H["✍️ Oracle signs<br/>Claim(amountHandle)"]
+    H --> I["💸 confidentialTransfer<br/>(user, amountHandle)"]
+
+    style A fill:#f8fafc,stroke:#334155,color:#000
+    style B fill:#412891,stroke:#7c3aed,color:#fff
+    style C fill:#22c55e,stroke:#4ade80,color:#000
+    style D fill:#3b82f6,stroke:#60a5fa,color:#fff
+    style E fill:#06b6d4,stroke:#22d3ee,color:#000
+    style F fill:#06b6d4,stroke:#22d3ee,color:#000
+    style G fill:#f59e0b,stroke:#fbbf24,color:#000
+    style H fill:#f59e0b,stroke:#fbbf24,color:#000
+    style I fill:#22c55e,stroke:#4ade80,color:#000
+```
 
 ---
 
-## Privacy Model — What's Public, What's Encrypted
+## 🔐 Privacy Model
 
-```
-ON-CHAIN (Ethereum Sepolia, anyone can read)
-─────────────────────────────────────────────────────────────────────────────
-WHAT IS PUBLIC                          WHAT IS FHE-ENCRYPTED
-──────────────                          ─────────────────────
-Market ID                               Vault deposit amount     (euint64)
-Market title / category / expiry        Vault balance per user   (euint64)
-User EOA address                        Per-market lock amount   (euint64)
-Bet side (YES or NO)                    Total locked per user    (euint64)
-Market status (Active / Resolved)       YES pool total           (euint64)
-Resolved outcome (binary)               NO pool total            (euint64)
-Sealed-window start / end / settled     Per-user YES position    (euint64)
-Tx hashes + block timestamps            Per-user NO position     (euint64)
-                                        Pre-window pool snapshot (euint64)
-                                        Payout amount handle     (euint64)
-                                        Confidential transfers   (euint64)
-```
+<p>
+  <img src="https://img.shields.io/badge/Public%20on%20chain-6%20fields-64748b?style=flat-square" />
+  <img src="https://img.shields.io/badge/FHE%20encrypted-11%20fields-EF4444?style=flat-square" />
+  <img src="https://img.shields.io/badge/Amount%20in%20events-zero-22c55e?style=flat-square" />
+</p>
 
-**Events deliberately strip amount fields.** For example:
+| On-chain — anyone can read | FHE-encrypted (`euint64` ciphertext handle only) |
+|:---------------------------|:-------------------------------------------------|
+| Market ID, title, category, expiry | Vault deposit amount |
+| User EOA address | Vault balance per user |
+| Bet side (YES / NO) | Per-market collateral lock |
+| Market status, resolved outcome | Total locked per user |
+| Sealed-window timestamps | YES pool total · NO pool total |
+| Tx hashes, block numbers | Per-user YES position · NO position |
+| | Pre-window pool snapshot |
+| | Payout amount handle |
+
+**Every on-chain event has zero amount fields — by design:**
 
 ```solidity
-event BetPlaced  (uint256 indexed marketId, address indexed user, bool indexed side);
-event Deposited  (address indexed user);
-event Withdrawn  (address indexed user);
-event BetLocked  (address indexed user, bytes32 indexed marketId, bool side);
+event BetPlaced    (uint256 indexed marketId, address indexed user, bool indexed side);
+event Deposited    (address indexed user);
+event BetLocked    (address indexed user, bytes32 indexed marketId, bool side);
 event PayoutClaimed(address indexed user, bytes32 indexed marketId);
 ```
 
-Notice: zero `amount` parameters. Compare this to any standard prediction market.
+**ACL — who can decrypt what:**
 
-The ACL model (enforced by Zama coprocessor):
+| Role | Can read | Mechanism |
+|:-----|:---------|:----------|
+| ![](https://img.shields.io/badge/-User%20(self)-8B5CF6?style=flat-square) | Own balance, own lock, own position | `FHE.allow(handle, msg.sender)` on every write |
+| ![](https://img.shields.io/badge/-Contract-64748b?style=flat-square) | Its own ciphertexts (for re-use in arithmetic) | `FHE.allowThis(handle)` |
+| ![](https://img.shields.io/badge/-Oracle%20Resolver-F59E0B?style=flat-square) | Pool totals — only after resolution or window settlement | `FHE.allow(pool, resolver)` in `resolveMarket` / `settleSealedWindow` |
+| ![](https://img.shields.io/badge/-Other%20Traders-EF4444?style=flat-square) | Nothing, ever | No ACL entry is written for third parties |
 
-| Role | Can decrypt | How |
-|---|---|---|
-| **User (self)** | Own vault balance, own lock, own position | `FHE.allow(handle, msg.sender)` on every write |
-| **Contract** | Its own ciphertexts (for re-use in arithmetic) | `FHE.allowThis(handle)` |
-| **Oracle resolver** | Pool totals **only after** market resolution or sealed-window settlement | `FHE.allow(pool, resolver)` in `resolveMarket` / `settleSealedWindow` |
-| **Winner's position** | Granted to oracle only after `grantPositionAccess` post-resolution | Single-use grant per resolution |
-| **Other traders** | Never. No ACL entry is ever written for third parties. | — |
+> **Privacy is trader-private, not authority-private.** A regulator can be issued an ACL grant to specific handles via contract upgrade — the cryptography supports selective disclosure. This is the same shape as institutional dark pools in TradFi.
 
 ---
 
-## The Encrypted Stack, in Depth
+## 🔬 Encrypted Stack
 
-### 1. ERC-7984 cUSDC Custody — encrypted money on rails
+### 1. ERC-7984 Confidential Vault
 
-The collateral asset is **Zama's canonical Sepolia confidential USDC** — a wrapper around a public mock USDC that implements [ERC-7984](https://eips.ethereum.org/EIPS/eip-7984):
+<p>
+  <img src="https://img.shields.io/badge/GhostVaultV2-ERC--7984%20cUSDC%20custody-22c55e?style=flat-square" />
+  <img src="https://img.shields.io/badge/No%20plaintext%20uint256%20balance-anywhere-EF4444?style=flat-square" />
+</p>
 
-| Layer | Address (Sepolia) | Role |
-|---|---|---|
-| Underlying mock USDC (public ERC-20, mintable) | `0x9b5Cd13b8eFbB58Dc25A05CF411D8056058aDFfF` | Faucet token — users mint, then wrap |
-| cUSDC Mock wrapper (ERC-7984 confidential) | `0x7c5BF43B851c1dff1a4feE8dB225b87f2C223639` | The encrypted version users actually deposit |
+| Layer | Sepolia Address | Role |
+|:------|:----------------|:-----|
+| ![](https://img.shields.io/badge/-Mock%20USDC-64748b?style=flat-square) Underlying (ERC-20, mintable) | [`0x9b5C…dFfF`](https://sepolia.etherscan.io/address/0x9b5Cd13b8eFbB58Dc25A05CF411D8056058aDFfF) | Faucet token — mint, then wrap |
+| ![](https://img.shields.io/badge/-cUSDC%20Mock-06B6D4?style=flat-square) ERC-7984 confidential wrapper | [`0x7c5B…3639`](https://sepolia.etherscan.io/address/0x7c5BF43B851c1dff1a4feE8dB225b87f2C223639) | What users actually deposit |
 
-ERC-7984 is the "encrypted balance" standard built on Zama's FHEVM:
+`deposit` — the key insight: the vault never holds a plaintext amount at any step.
 
-- `confidentialBalanceOf(user)` returns an **encrypted handle** — even calling `balanceOf` reveals nothing.
-- `confidentialTransfer(to, encAmount)` moves encrypted value between users.
-- `setOperator(spender, untilTimestamp)` is the encrypted-token replacement for ERC-20 `approve` — the spender (e.g. `GhostVaultV2`) becomes authorised to call `confidentialTransferFrom(user, ...)` for the validity period.
-
-**GhostVaultV2** (`contracts/contracts/GhostVaultV2.sol`) is the protocol's confidential bank:
-
-```solidity
-contract GhostVaultV2 is ZamaEthereumConfig, ReentrancyGuard, Pausable, Ownable2Step, EIP712 {
-    IERC7984 public immutable collateral;                 // cUSDC
-
-    mapping(address => euint64)                        _balances;
-    mapping(address => mapping(bytes32 => euint64))    _lockedAmounts;
-    mapping(address => euint64)                        _totalLocked;
-}
+```
+user: setOperator(vault, forever)              ← encrypted-token "approve"
+user: encrypt(amount) → (handle, ZKPoK)        ← plaintext gone in browser
+GhostVaultV2.deposit(handle, proof):
+  FHE.fromExternal(handle, proof)              ← verify ZKPoK
+  FHE.allow(amount, address(cUSDC))            ← let cUSDC use this handle
+  cUSDC.confidentialTransferFrom(user, vault)  ← homomorphic debit, no plaintext
+  _balances[user] = FHE.add(_balances[user], transferred)
 ```
 
-`deposit(externalEuint64 encAmount, bytes proof)` is **the single most interesting function in the codebase**:
-
-1. The user already called `setOperator(vault, untilForever)` on cUSDC.
-2. They encrypt the deposit amount client-side, producing `(encAmount, proof)` bound to `(GhostVaultV2, msg.sender)`.
-3. Vault verifies the proof via `FHE.fromExternal`.
-4. Vault calls `FHE.allowThis(amount)` and `FHE.allow(amount, address(collateral))` — granting the cUSDC token contract permission to use the handle in its internal FHE arithmetic.
-5. Vault calls `collateral.confidentialTransferFrom(user, vault, amount)`. The token uses the user's encrypted balance and the operator allowance to homomorphically subtract `amount` and credit the vault — **all without ever decrypting**.
-6. Vault accumulates the transferred handle into the user's encrypted vault balance.
-
-Withdraws, locks, and unlocks all follow the same handle-only pattern. There is no `uint256 balance` anywhere on the vault.
-
-**`lockForBet` is also worth highlighting:**
+Overdraw can't be a `revert` — the EVM never sees a plaintext comparison. Instead:
 
 ```solidity
-ebool   isSufficient    = FHE.ge(free, amount);
-euint64 effectiveAmount = FHE.select(isSufficient, amount, FHE.asEuint64(0));
+ebool   ok              = FHE.ge(freeBalance, amount);
+euint64 effectiveAmount = FHE.select(ok, amount, FHE.asEuint64(0));  // clamp in coprocessor
 ```
 
-The vault cannot revert on an encrypted comparison (the EVM never sees the plaintext). Instead, an overdraw is silently clamped to zero via `FHE.select`. Same trick as the EAMM's minimum-bet guard — branching happens **inside** the coprocessor, the EVM only handles ciphertext handles.
+### 2. Encrypted AMM
 
-### 2. GhostEAMM — Encrypted AMM
+`GhostEAMM` pool totals accumulate via `FHE.add`. No party has ACL access until market resolution or sealed-window settlement.
 
-`contracts/contracts/GhostEAMM.sol` is the confidential execution layer. Three things make it interesting:
-
-**(a) Pool totals are ciphertexts, accumulated homomorphically.**
+The minimum-bet guard runs entirely inside the coprocessor — the EVM never sees whether the submitted amount passed:
 
 ```solidity
-m.yesPool = FHE.add(m.yesPool, effectiveAmount);
-FHE.allowThis(m.yesPool);
+ebool   aboveMin        = FHE.gt(amount, FHE.asEuint64(MIN_BET_UNITS));
+euint64 effectiveAmount = FHE.select(aboveMin, amount, FHE.asEuint64(0));
 ```
 
-No party — not the resolver, not the contract owner, not the deployer — has standing ACL access to the pool until either the market resolves or a sealed window settles.
-
-**(b) Minimum-bet guard, enforced homomorphically.**
-
-You can't write `require(amount >= 1 USDC)` against ciphertext. Instead:
+Per-user positions are ACL-scoped to the owner on every write:
 
 ```solidity
-ebool   aboveMin        = FHE.gt(amount, FHE.asEuint64(MIN_BET_UNITS));   // encrypted bool
-euint64 effectiveAmount = FHE.select(aboveMin, amount, FHE.asEuint64(0)); // encrypted ternary
-```
-
-Dust bets are silently neutralised. The chain never learns whether a particular submission was above or below threshold — the proof of which is the centerpiece of the contract's "encrypted conditional logic" pattern.
-
-**(c) Per-user position handles, ACL-scoped.**
-
-```solidity
-_yesPositions[marketId][msg.sender] = FHE.add(_yesPositions[marketId][msg.sender], effectiveAmount);
+_yesPositions[marketId][msg.sender] = FHE.add(..., effectiveAmount);
 FHE.allowThis(_yesPositions[marketId][msg.sender]);
-FHE.allow    (_yesPositions[marketId][msg.sender], msg.sender);   // <-- user can re-encrypt own position
+FHE.allow    (_yesPositions[marketId][msg.sender], msg.sender);  // user decrypts own position
 ```
 
-The user can pull their own position handle and decrypt it via the Zama gateway's `userDecrypt` re-encryption flow. Nobody else can. After resolution, the resolver gets one-shot access to *only the winning side* of *one specific user* per call to `grantPositionAccess`.
+After resolution the oracle gets one-shot ACL on *only the winning side* of *one specific user* via `grantPositionAccess`.
 
-### 3. Sealed-Bid Windows — time-batched, frontrun-proof price reveal
+### 3. Sealed-Bid Windows
 
-Even with encrypted bets, there's a subtle leakage path: if **decrypted** post-bet pool prices are continuously visible, a trader can place a tiny probe bet, watch the price tick, and infer the previous bet's size from the delta.
+Even with encrypted bets, a continuously visible price is a side-channel: a tiny probe bet + the resulting price delta reveals the previous bet's size. Sealed windows close this.
 
-Sealed-bid windows close that hole. They're a novel mechanism in this stack and arguably the most interesting product surface:
+```mermaid
+stateDiagram-v2
+    [*] --> Open: openSealedWindow — snapshot pool handles
+    Open --> Accepting: placeBet (price display frozen at snapshot)
+    Accepting --> Pending: window timer expires — placeBet blocked
+    Pending --> Settled: oracle calls settleSealedWindow
+    Settled --> Revealed: publishWindowPrice → PriceRevealed event
+    Revealed --> [*]: frontend animates price jump
+```
+
+> **Commit-reveal without a second user transaction.** The clock is the reveal; the bets were real the whole time; nobody owes a second tx. The combined delta publishes as one `PriceRevealed` event — no participant can chart anyone else's order flow inside the window.
+
+### 4. Confidential Settlement
+
+After oracle quorum the oracle signs over the **encrypted ciphertext handle**, not a plaintext amount:
 
 ```solidity
-struct SealedWindow {
-    uint64  startsAt;
-    uint64  endsAt;
-    bool    settled;
-    euint64 yesPoolSnapshot;   // handle that points to the pool state AT window-open
-    euint64 noPoolSnapshot;
-}
+// GhostVaultV2 — CLAIM_TYPEHASH
+"Claim(address user, bytes32 marketId, bytes32 amountHandle, uint256 nonce, uint256 expiry)"
+//                                      ^^^^^^^^^^^^^^^^^^^
+//                                      euint64 handle — not a uint256 amount
 ```
 
-The flow:
+The vault verifies the signature and calls `cUSDC.confidentialTransfer(user, amountHandle)`. The handle flows through homomorphically.
 
-1. **`openSealedWindow(marketId, durationSecs)`** — snapshots the *current* pool handles. Because every `FHE.add` produces a fresh handle, the snapshot handles remain frozen at the pre-window state forever.
-2. **During the window**, `placeBet` continues to land encrypted bets. New `FHE.add` calls produce new handles for the live pools — but **no party is granted ACL on the new handles yet**, so the live totals stay opaque to everyone, including the oracle. The frontend shows the snapshot-derived odds.
-3. **Window expires** — `placeBet` is gated by a `WindowSettlementPending` revert until settlement happens, preventing a sneak-in-bet between expiry and ACL-grant.
-4. **Oracle watcher** (`oracle/src/sealed-window-watcher.ts`, polling at 10s default) calls `settleSealedWindow(marketId, idx)` — the contract `FHE.allow`s the resolver on both the post-window pool handles **and** the snapshots.
-5. Watcher does a Zama `userDecrypt` (re-encryption EIP-712 flow with an ephemeral keypair) of the post-window pools, computing actual totals.
-6. Watcher calls **`publishWindowPrice(marketId, idx, yesTotal, noTotal)`** which emits `PriceRevealed`. The frontend (`web/src/components/sealed-countdown.tsx`) animates the reveal — the price visibly jumps as the batched bets land at once.
+**The plaintext payout exists only in the user's browser** when they decrypt their own balance handle. It never appears in: oracle memory, vault storage, token storage, calldata, events, or any block explorer.
 
-This is **commit-reveal without the user ceremony**. Traders aren't asked to "come back and reveal" — the clock is the reveal, the bet was real the whole time, and nobody owes a second transaction.
-
-Public surface of a window: `startsAt`, `endsAt`, `settled`, ciphertext snapshot handles, on-chain `PriceRevealed` event after settlement. Public surface during the window: nothing. The combined delta is published as a single event after the window closes, so no participant inside the window can chart anyone else's order flow.
-
-### 4. Oracle Room — AI agent quorum
-
-`oracle/` is a standalone Node.js HTTP + WebSocket server (port 8092) that runs the agent swarm.
-
-**Agent definitions** (`oracle/src/agents.ts`):
-
-| ID | Name | Source | Personality |
-|---|---|---|---|
-| 1 | Cipher  | Binance       | Data-driven analyst; only trusts on-chain + top-tier CEX feeds |
-| 2 | Specter | CoinGecko     | Cautious risk assessor; requires high-confidence signals for YES |
-| 3 | Wraith  | Chainlink*    | Prioritises on-chain oracle feeds over off-chain price data |
-| 4 | Phantom | Coinbase      | Contrarian; stress-tests the consensus, probes edge cases |
-| 5 | Shade   | Kraken        | Consensus-seeker; cross-references multiple signals |
-| 6 | Echo    | OKX           | Aggregator; synthesises across sources, weights by volume |
-| 7 | Vex     | Bybit         | Adversarial tester; actively looks for manipulation / stale data |
-
-\* CryptoCompare used as a public proxy for Chainlink-style aggregated pricing on testnet.
-
-Configurable agent count via `ACTIVE_ORACLE_AGENTS` (default 4). Quorum is `floor(N/2)+1` (so 3-of-4, or 4-of-7 if all definitions are active).
-
-**Per-agent resolution flow** (`oracle/src/index.ts`):
-
-1. `fetching` → hits its source's public API (`oracle/src/fetcher.ts`) with a 6s timeout. Public, unauthenticated endpoints — no API keys required. Endpoints cover BTC/ETH/SOL/XRP/DOGE/ADA/TON spot, Base TVL via DeFiLlama, Fed Funds via US Treasury FiscalData, and policy/macro markets via reasoning fallback.
-2. `attesting` → injects the fetched value into a personality-specific OpenAI prompt (default `gpt-4o-mini`, 9s timeout, JSON-only output). The agent returns `{vote: YES|NO, reasoning: "2-3 sentences"}` grounded in the real number it just fetched.
-3. `submitted` → records the vote.
-4. When quorum is reached, the oracle:
-   - Marks the market finalised in memory.
-   - Calls `GhostEAMM.resolveMarket(marketId, outcome)` on Sepolia.
-   - Begins serving signed settlements via `POST /oracle/settle/:marketId`.
-5. Reputation scores update: +2 for correct vote, –10 for wrong (in-memory, persists across the session).
-
-**Frontend `Oracle Room`** (`web/src/components/oracle-room.tsx`, ~1250 LOC of real-time UX):
-
-- WebSocket subscription per market — live agent state transitions, real reasoning text, vote tallies, and on-chain tx hashes scroll as they happen.
-- "Resolve market" button triggers `POST /oracle/resolve/:marketId`.
-- Visible: source URLs the agents are pulling, the actual reasoning each agent returned, the tx hash of the on-chain `resolveMarket` call, and the per-user settlement claim status.
-
-The oracle is the demo's most "AI-native" surface — every line of reasoning the audience sees is a live LLM response grounded in a real fetch, not pre-canned text.
-
-### 5. Confidential Settlement — signing over ciphertext handles
-
-This is the part that closes the loop. After quorum, the oracle has to issue a payout claim that the user can present to GhostVault to get their cUSDC. **It does this without ever knowing or revealing the plaintext payout.**
-
-The EIP-712 schema in `GhostVaultV2`:
-
-```solidity
-bytes32 public constant CLAIM_TYPEHASH = keccak256(
-    "Claim(address user,bytes32 marketId,bytes32 amountHandle,uint256 nonce,uint256 expiry)"
-);
-```
-
-Note `amountHandle` is `bytes32` — the **encrypted handle** of an `euint64`, not a `uint256` amount.
-
-The oracle (`oracle/src/oracle-signer.ts`) signs over the handle of the user's locked-collateral position. The vault verifies and immediately calls `collateral.confidentialTransfer(user, amount)` — passing the same encrypted handle through to cUSDC, which homomorphically debits the vault and credits the user.
-
-**The plaintext payout amount exists only in two places, ever:**
-
-1. The user's own browser when they decrypt their position handle to display "you have 12.50 USDC pending".
-2. The user's own browser when they decrypt their cUSDC balance after the claim lands.
-
-It never exists in: the oracle's memory, the oracle's database, the vault's storage, the cUSDC token's storage, the calldata, the events, or any block explorer.
-
-Replay protection: `usedNonces[user][marketId][nonce]` triple. Expiry enforcement: 24-hour TTL. Signer rotation: `setSettlementSigner(newOracle)` from vault owner.
-
-### 6. Walletless onboarding via Privy
-
-`web/src/lib/privy/` integrates [Privy](https://privy.io) for embedded wallets. The user signs in with Google / email / passkey and an EOA is created for them in-browser — same address every time they log in, same Sepolia identity. No mnemonic, no extension, no faucet step before login.
-
-That EOA signs:
-
-- The cUSDC `setOperator` tx (one-time per session).
-- The Zama relayer-SDK EIP-712 re-encryption authorisations.
-- The Vault `deposit`/`lockForBet`/`claimPayout` txs.
-- The EAMM `placeBet` tx.
-
-The bet-slip flow (`web/src/components/bet-slip.tsx`) chains operator-set → vault-deposit (if low) → lock-collateral → encrypt-bet → place-bet automatically, with stepwise UI ("encrypting…", "locking…", "signing…"). The user clicks one button.
+Replay protection: `usedNonces[user][marketId][nonce]`. Settlement TTL: 24 hours. Signer rotation: `setSettlementSigner(newOracle)`.
 
 ---
 
-## End-to-End User Journey
+## 🤖 Oracle Agent Quorum
 
-### Phase 1 — Discover
+<p>
+  <img src="https://img.shields.io/badge/7%20agents%20defined-4%20active%20by%20default-F59E0B?style=flat-square" />
+  <img src="https://img.shields.io/badge/Quorum-floor(N%2F2)%2B1-F59E0B?style=flat-square" />
+  <img src="https://img.shields.io/badge/Model-gpt--4o--mini-22c55e?style=flat-square" />
+  <img src="https://img.shields.io/badge/Live%20API%20fetch-no%20pre--canned%20data-EF4444?style=flat-square" />
+</p>
 
-1. Land on `/` — see active markets with implied odds drawn from the public market metadata + (post-sealed-window) revealed pool ratios.
-2. Click a market → `/markets/[id]`. The `MarketDetailLeftPanel` shows the title, expiry, category, source-of-truth blurb, the live YES/NO odds (or the frozen snapshot odds if a sealed window is active), and the `SealedCountdown` overlay if relevant.
+| Agent | Source | Personality |
+|:------|:-------|:------------|
+| ![](https://img.shields.io/badge/-Cipher-EF4444?style=flat-square) | Binance | Data-driven; only trusts top-tier CEX feeds |
+| ![](https://img.shields.io/badge/-Specter-3B82F6?style=flat-square) | CoinGecko | Cautious; high threshold before voting YES |
+| ![](https://img.shields.io/badge/-Wraith-8B5CF6?style=flat-square) | Chainlink / CryptoCompare | On-chain feeds preferred over off-chain |
+| ![](https://img.shields.io/badge/-Phantom-F59E0B?style=flat-square) | Coinbase | Contrarian; stress-tests the consensus |
+| ![](https://img.shields.io/badge/-Shade-22c55e?style=flat-square) | Kraken | Cross-reference consensus-seeker |
+| ![](https://img.shields.io/badge/-Echo-06B6D4?style=flat-square) | OKX | Volume-weighted aggregator |
+| ![](https://img.shields.io/badge/-Vex-64748b?style=flat-square) | Bybit | Adversarial; hunts manipulation and stale data |
 
-### Phase 2 — Onboard (first-time only)
+Each agent: `fetching` (live API call, 6s timeout) → `attesting` (personality-specific gpt-4o-mini prompt with the real fetched value, JSON-only `{vote, reasoning}`) → `submitted`. On quorum: `resolveMarket` on Sepolia, settlement endpoint opens.
 
-3. Click **YES** or **NO** → the `BetSlip` opens, prompting **Sign in with Google**.
-4. Privy creates an embedded EOA. The address is shown in the navbar — no mnemonic.
-
-### Phase 3 — Fund the encrypted vault
-
-5. Navigate to `/vault`.
-6. The page detects the user's underlying USDC balance, cUSDC balance, and vault balance handle.
-7. **Mint** flow if needed (mock underlying USDC has public `mint`).
-8. **Wrap** → calls `cUSDCMock.wrap(user, amount)` (after approving the wrapper to pull the underlying ERC-20).
-9. **setOperator** → makes the vault authorised to call `confidentialTransferFrom` on the user's cUSDC.
-10. **Deposit** → client-side encrypt the amount; submit `GhostVaultV2.deposit(encAmount, proof)`. The vault's stored balance for this user is now an `euint64`.
-
-### Phase 4 — Shielded bet
-
-11. Back in the bet-slip, enter an amount, click **Place bet**.
-12. UI runs: `encrypt(amount) for vault` → `lockForBet(marketId, side, encAmount, proof)` → `encrypt(amount) for EAMM` → `placeBet(marketId, side, encAmount, proof)` — all in one chained click.
-13. `BetPlaced` emits; the explorer log shows market + user + side, **no amount**.
-14. If a sealed window is active, the displayed odds don't move. The user's bet is in the pool, but the pool delta won't surface until the window settles.
-
-### Phase 5 — Sealed-window reveal (optional)
-
-15. If admin opened a window (`GhostMarket.openSealedWindow(id, durationSecs)`), the `SealedCountdown` shows a ticking timer with the frozen snapshot price.
-16. Bets pile in encrypted during the window — from this user, from a second incognito user, from anyone.
-17. Timer hits zero → "Settling…" indicator.
-18. Watcher settles + decrypts + publishes → `PriceRevealed` emitted → UI flashes the new price.
-
-### Phase 6 — Resolution
-
-19. Market expiry (or admin trigger) → user navigates to `/oracle` for the chosen market, clicks **Resolve**.
-20. The Oracle Room WebSocket subscribes; agents start spinning in real time. The user sees each agent's fetched price, each agent's LLM reasoning, each vote.
-21. Quorum reached → `GhostEAMM.resolveMarket(id, outcome)` tx hash appears live.
-22. Oracle has finalised the outcome; settlement endpoint goes live.
-
-### Phase 7 — Claim payout
-
-23. `/portfolio` shows the user's positions per market, marked claimable when the oracle has finalised.
-24. User clicks **Claim** → frontend hits `POST /oracle/settle/:marketId` with their address → receives an EIP-712 signed claim over their `amountHandle`.
-25. Frontend submits `GhostVaultV2.claimPayout(marketId, amountHandle, nonce, expiry, sig)`.
-26. Vault verifies sig + nonce + expiry, releases the lock, calls `cUSDC.confidentialTransfer(user, amountHandle)`. The user's encrypted cUSDC balance ticks up.
-27. The user can now `withdraw(encAmount, proof)` from the vault back to their cUSDC, then unwrap to underlying USDC if desired.
-
-Every step above logs an event with **no plaintext amounts**.
+The **Oracle Room** (`/oracle`, ~1250 LOC) streams every agent's state, fetched price, live LLM reasoning, and on-chain tx hash via WebSocket. Every reasoning line is a real LLM response grounded in a real API call — nothing is pre-canned.
 
 ---
 
-## Compliance Model
+## 🧭 User Journey
 
-GhostMarket's privacy is **trader-private, not authority-private**.
-
-- A user can always re-encrypt and view their own positions, balances, and locks via the Zama gateway.
-- A regulator can be issued an ACL grant to specific handles via a contract upgrade or a new admin function — the cryptography supports it.
-- Block explorers see who interacted with what contract, when, on which side — they just don't see size.
-
-This is the same shape as institutional dark pools in TradFi: execution size is private from other participants, but reportable through defined access paths. Selective disclosure is a feature of the model, not a workaround for it.
-
----
-
-## Deployed Contracts (Sepolia)
-
-All on **Ethereum Sepolia, chainId 11155111**. Wired so `GhostMarket` is the only admin entry point — it's set as both `marketManager` and `resolver` on the EAMM. The deployed oracle EOA is the EAMM's underlying resolver/owner and the vault's `settlementSigner`.
-
-| Component | Address |
-|---|---|
-| Underlying USDC mock (public mint, ERC-20) | [`0x9b5Cd13b8eFbB58Dc25A05CF411D8056058aDFfF`](https://sepolia.etherscan.io/address/0x9b5Cd13b8eFbB58Dc25A05CF411D8056058aDFfF) |
-| cUSDC Mock wrapper (ERC-7984 confidential) | [`0x7c5BF43B851c1dff1a4feE8dB225b87f2C223639`](https://sepolia.etherscan.io/address/0x7c5BF43B851c1dff1a4feE8dB225b87f2C223639) |
-| `GhostEAMM.sol` (encrypted AMM + sealed windows) | [`0xab7562Cfb1C57aF0975988bDC3e5403C228c0F5E`](https://sepolia.etherscan.io/address/0xab7562Cfb1C57aF0975988bDC3e5403C228c0F5E) |
-| `GhostVaultV2.sol` (cUSDC custody + settlement) | [`0xddd9551a02B27a798510d88f6Eda9D9BB3BdB48f`](https://sepolia.etherscan.io/address/0xddd9551a02B27a798510d88f6Eda9D9BB3BdB48f) |
-| `GhostMarket.sol` (metadata + lifecycle entry) | [`0xbD4fBBD2789466e2F38B47b25648839c68F9Bfd0`](https://sepolia.etherscan.io/address/0xbD4fBBD2789466e2F38B47b25648839c68F9Bfd0) |
-
-The Zama mock USDC and cUSDC Mock are Zama's [canonical Sepolia addresses](https://docs.zama.org/protocol/protocol-apps/addresses/testnet/sepolia) — anyone with USDC there can use the same vault.
-
-**Zama protocol infrastructure used (Sepolia):**
-
-| Component | Endpoint |
-|---|---|
-| FHEVM coprocessor | Wired via `@fhevm/solidity` `ZamaEthereumConfig` at compile time |
-| Relayer | `https://relayer.testnet.zama.org` (auto-configured by `SepoliaConfig` / `SepoliaConfigV2` in `@zama-fhe/relayer-sdk`) |
-| KMS gateway | Embedded in relayer SDK; used for `userDecrypt` re-encryption flow |
+| Phase | Action | What happens on-chain |
+|:------|:-------|:----------------------|
+| ![](https://img.shields.io/badge/1-Discover-64748b?style=flat-square) | Browse `/`, click a market | Reads public metadata + post-window `PriceRevealed` events |
+| ![](https://img.shields.io/badge/2-Onboard-8B5CF6?style=flat-square) | Click YES/NO → Google sign-in | Privy creates embedded EOA — no mnemonic |
+| ![](https://img.shields.io/badge/3-Fund%20Vault-22c55e?style=flat-square) | `/vault` → mint → wrap → setOperator → deposit | `confidentialTransferFrom`; vault balance becomes `euint64` |
+| ![](https://img.shields.io/badge/4-Shielded%20Bet-3B82F6?style=flat-square) | Enter amount, click Place Bet (one click) | `lockForBet` + `placeBet` — `BetPlaced` event has no amount |
+| ![](https://img.shields.io/badge/5-Sealed%20Reveal-06B6D4?style=flat-square) | Watch `SealedCountdown` → timer hits zero | Oracle settles window, KMS decrypts pools, `PriceRevealed` emitted |
+| ![](https://img.shields.io/badge/6-Resolution-F59E0B?style=flat-square) | `/oracle` → Resolve → watch agents stream live | `resolveMarket` tx appears on Sepolia in real time |
+| ![](https://img.shields.io/badge/7-Claim-22c55e?style=flat-square) | `/portfolio` → Claim | Oracle signs `Claim(amountHandle)`; vault calls `confidentialTransfer(user, handle)` |
 
 ---
 
-## Repository Layout
+## 📦 Deployed Contracts
+
+<p>
+  <img src="https://img.shields.io/badge/Network-Ethereum%20Sepolia%2011155111-627EEA?style=flat-square&logo=ethereum&logoColor=white" />
+  <img src="https://img.shields.io/badge/Solidity-0.8.26-363636?style=flat-square&logo=solidity&logoColor=white" />
+  <img src="https://img.shields.io/badge/OpenZeppelin-v5-4E5EE4?style=flat-square" />
+</p>
+
+| Contract | Address | Role |
+|:---------|:--------|:-----|
+| ![](https://img.shields.io/badge/-Mock%20USDC-64748b?style=flat-square) | [`0x9b5C…dFfF`](https://sepolia.etherscan.io/address/0x9b5Cd13b8eFbB58Dc25A05CF411D8056058aDFfF) | Underlying ERC-20, public mint |
+| ![](https://img.shields.io/badge/-cUSDC%20Mock-06B6D4?style=flat-square) | [`0x7c5B…3639`](https://sepolia.etherscan.io/address/0x7c5BF43B851c1dff1a4feE8dB225b87f2C223639) | ERC-7984 confidential wrapper |
+| ![](https://img.shields.io/badge/-GhostEAMM-3B82F6?style=flat-square) | [`0xab75…0F5E`](https://sepolia.etherscan.io/address/0xab7562Cfb1C57aF0975988bDC3e5403C228c0F5E) | Encrypted AMM + sealed-bid windows |
+| ![](https://img.shields.io/badge/-GhostVaultV2-22c55e?style=flat-square) | [`0xddd9…B48f`](https://sepolia.etherscan.io/address/0xddd9551a02B27a798510d88f6Eda9D9BB3BdB48f) | cUSDC custody + EIP-712 settlement |
+| ![](https://img.shields.io/badge/-GhostMarket-7C3AED?style=flat-square) | [`0xbD4f…Bfd0`](https://sepolia.etherscan.io/address/0xbD4fBBD2789466e2F38B47b25648839c68F9Bfd0) | Metadata registry + lifecycle entry |
+
+The cUSDC addresses are [Zama's canonical Sepolia tokens](https://docs.zama.org/protocol/protocol-apps/addresses/testnet/sepolia) — anyone with Sepolia USDC can interact with the same vault.
+
+**Live shielded bet tx** (encrypted calldata, no amount in events): [`0x5994…9350`](https://sepolia.etherscan.io/tx/0x5994971938fcce4b63f3691218a62286963d57fe6b224e07879319691f6e9350)
+
+---
+
+## 🗂 Repository Layout
 
 ```
 GhostMarket/
-├── contracts/                        — Hardhat workspace (Solidity 0.8.26, viaIR, optimizer 200)
+├── 📜 contracts/
 │   ├── contracts/
-│   │   ├── GhostEAMM.sol             — FHE encrypted AMM + sealed-bid windows
-│   │   ├── GhostVaultV2.sol          — ERC-7984 cUSDC custody + EIP-712 settlement
-│   │   ├── GhostMarket.sol           — Metadata registry + lifecycle forwarder
-│   │   └── MockUSDC.sol              — Optional plaintext-mode test ERC-20 (Zama mock used by default)
-│   ├── legacy/                       — Archived v1 plaintext vault, not deployed
+│   │   ├── GhostEAMM.sol           — FHE encrypted AMM + sealed-bid windows
+│   │   ├── GhostVaultV2.sol        — ERC-7984 cUSDC custody + EIP-712 settlement
+│   │   └── GhostMarket.sol         — Metadata registry + lifecycle forwarder
 │   ├── scripts/
-│   │   ├── deploy-sepolia.ts         — Full Sepolia stack deployment (use this)
-│   │   ├── redeploy-eamm.ts          — EAMM-only upgrade (auto-rewires GhostMarket)
-│   │   ├── demo-sealed-window.ts     — Seed a 5-min sealed-window market for demo
-│   │   ├── seed-markets.ts           — Seed canonical demo market set
-│   │   ├── seed-3-markets.ts         — Smaller demo seed
-│   │   ├── seed-eamm-bet.ts          — Place a test encrypted bet
-│   │   ├── sync-markets-to-eamm.ts   — Reconcile metadata ↔ EAMM after partial redeploys
-│   │   ├── update-settlement-signer.ts — Rotate the oracle key on GhostVaultV2
-│   │   └── fund-wallet.ts            — Send Sepolia ETH from deployer to a target wallet
-│   ├── test/
-│   │   ├── GhostEAMM.test.ts         — FHE bet flow, sealed-window lifecycle, ACL grants, min-bet guard
-│   │   └── GhostMarket.test.ts       — Legacy v1 self-contained market suite (kept for reference)
-│   └── hardhat.config.ts             — Sepolia + Hardhat-local FHE-mock networks
+│   │   ├── deploy-sepolia.ts       — Full stack deploy (use this)
+│   │   ├── redeploy-eamm.ts        — EAMM-only upgrade + auto-rewire
+│   │   ├── demo-sealed-window.ts   — Seed a 5-min sealed-window market
+│   │   └── seed-markets.ts / seed-3-markets.ts
+│   └── test/
+│       └── GhostEAMM.test.ts       — FHE bets, sealed windows, ACL grants, min-bet guard
 │
-├── oracle/                           — Node.js oracle service (port 8092)
-│   └── src/
-│       ├── index.ts                  — Express + WebSocket server, per-market resolution sessions
-│       ├── agents.ts                 — 7 agent personality definitions
-│       ├── fetcher.ts                — Public-API fetchers (Binance/CoinGecko/Coinbase/Kraken/OKX/Bybit/CryptoCompare/DeFiLlama/FRED)
-│       ├── eamm-resolver.ts          — On-chain GhostEAMM.resolveMarket + grantPositionAccess
-│       ├── settlement.ts             — Per-user EIP-712 claim caching
-│       ├── oracle-signer.ts          — EIP-712 signing of Claim over `amountHandle`
-│       ├── sealed-window-watcher.ts  — Settles expired windows, decrypts pools via Zama KMS, publishes PriceRevealed
-│       └── sepolia-keys.ts           — Centralised key loader (oracle / resolver / settlement signer)
+├── 🤖 oracle/src/
+│   ├── index.ts                    — Express + WebSocket server (port 8092)
+│   ├── agents.ts                   — 7 agent personality definitions
+│   ├── fetcher.ts                  — Live CEX / DeFiLlama / FRED fetchers (no API keys needed)
+│   ├── sealed-window-watcher.ts    — Settle expired windows → Zama KMS decrypt → publishWindowPrice
+│   ├── oracle-signer.ts            — EIP-712 sign Claim(user, marketId, amountHandle)
+│   └── eamm-resolver.ts            — On-chain resolveMarket + grantPositionAccess
 │
-├── web/                              — Next.js 15 frontend (React 19, Tailwind v4, Privy v3, viem v2)
-│   └── src/
-│       ├── app/
-│       │   ├── page.tsx              — Market homepage
-│       │   ├── markets/[id]/page.tsx — Market detail + bet slip
-│       │   ├── vault/page.tsx        — Underlying mint → wrap → setOperator → deposit / withdraw
-│       │   ├── portfolio/page.tsx    — Per-user positions + claim
-│       │   ├── oracle/page.tsx       — Oracle Room (live agent dashboard)
-│       │   ├── admin/page.tsx        — createMarket / openSealedWindow (resolver-only)
-│       │   └── api/oracle/…          — Frontend proxy to the Node oracle service
-│       ├── components/
-│       │   ├── bet-slip.tsx          — Shielded-bet chain (encrypt → lock → encrypt → place)
-│       │   ├── sealed-countdown.tsx  — Window countdown + reveal animation
-│       │   ├── oracle-room.tsx       — Live agent state + WebSocket subscription
-│       │   ├── portfolio-position-row.tsx — Decrypt-on-demand position display
-│       │   ├── market-detail-left-panel.tsx
-│       │   └── ui/                   — shadcn-style primitives (Button, Badge, Input)
-│       └── lib/
-│           ├── eamm.ts               — relayer-sdk init, encryption helpers, EAMM ABI + reads/writes, sealed-window subscriptions
-│           ├── vault.ts              — GhostVaultV2 + cUSDC helpers (wrap, setOperator, deposit, lock, claim, withdraw)
-│           ├── cusdc.ts              — Mock USDC + cUSDC Mock ABIs
-│           ├── oracle-client.ts      — Oracle REST + WS typed client
-│           ├── privy/                — Privy provider + embedded wallet helpers
-│           └── market.ts             — GhostMarket metadata reads
-│
-└── api/                              — FastAPI orchestration layer (optional, secondary surface)
-    ├── main.py                       — Health + router mount (port 8000)
-    └── routers/                      — markets / portfolio / auth / relayer / oracle proxy
+└── 🌐 web/src/
+    ├── app/                        — / · /markets/[id] · /vault · /portfolio · /oracle · /admin
+    ├── components/
+    │   ├── bet-slip.tsx            — 5-step shielded bet chain (one button click)
+    │   ├── sealed-countdown.tsx    — Window countdown + price reveal animation
+    │   └── oracle-room.tsx         — Live agent WebSocket dashboard (~1250 LOC)
+    └── lib/
+        ├── eamm.ts                 — relayer-sdk init, encryption, sealed-window subscriptions
+        └── vault.ts                — wrap → setOperator → deposit → lock → claim → withdraw
 ```
 
 ---
 
-## Running Locally
+## ⚡ Running Locally
 
-### Prerequisites
+<p>
+  <img src="https://img.shields.io/badge/Node.js-v18%2B-339933?style=flat-square&logo=node.js&logoColor=white" />
+  <img src="https://img.shields.io/badge/Sepolia%20RPC-Alchemy%20recommended-blue?style=flat-square" />
+  <img src="https://img.shields.io/badge/OpenAI%20Key-optional-64748b?style=flat-square" />
+</p>
 
-- Node.js ≥ 18
-- A Sepolia RPC URL (Alchemy / Infura strongly preferred over public RPCs for the relayer SDK)
-- A funded Sepolia EOA (for gas on deploys + admin operations; about 0.1 ETH covers a full redeploy + a dozen markets)
-- An OpenAI API key (optional; the oracle falls back to deterministic reasoning if missing)
-
-### 1. Deploy the contracts (Sepolia)
+### 1. Contracts
 
 ```bash
-cd contracts
-npm install
-cp .env.example .env
-# Fill in DEPLOYER_PRIVATE_KEY, ORACLE_PRIVATE_KEY, SEPOLIA_RPC_URL.
-# For testnet you can reuse the same key for both.
+cd contracts && npm install
+cp .env.example .env   # fill DEPLOYER_PRIVATE_KEY, ORACLE_PRIVATE_KEY, SEPOLIA_RPC_URL
 
 npx hardhat compile
 npx hardhat run scripts/deploy-sepolia.ts --network sepolia
+# Prints addresses → paste into contracts/.env, oracle/.env, and web/.env.local (all three)
 ```
 
-The script prints exact lines to paste into `contracts/.env`, `oracle/.env`, and `web/.env.local`. **Update all three in one pass** — partial updates leave the EAMM pointer mismatched and break the sealed-window flow.
-
-Defaults: collateral = Zama's canonical Sepolia `cUSDCMock` (`0x7c5B…`); to use a freshly deployed plaintext `MockUSDC.sol` + legacy plaintext vault instead, set `USE_ZAMA_SEPOLIA_MOCK_USDC=0` (and pull v1 from `contracts/legacy/`; not recommended).
-
-### 2. Seed test markets
-
 ```bash
-# From contracts/
 npx hardhat run scripts/seed-3-markets.ts --network sepolia
-# Or the full demo set:
-npx hardhat run scripts/seed-markets.ts --network sepolia
-```
 
-Optionally open a sealed-bid window for the demo:
-
-```bash
+# Optional: sealed-window demo market
 npx hardhat run scripts/demo-sealed-window.ts --network sepolia
-# Note the market ID printed. Set WATCHED_MARKETS=<id> in oracle/.env.
+# Note the market ID; set WATCHED_MARKETS=<id> in oracle/.env
 ```
 
-### 3. Oracle service
+### 2. Oracle service
 
 ```bash
-cd oracle
-npm install
-cp .env.example .env
-# Required: SEPOLIA_RPC_URL, SEPOLIA_PRIVATE_KEY (== ORACLE_PRIVATE_KEY from contracts/),
-#           GHOST_EAMM_ADDRESS, GHOST_VAULT_ADDRESS, GHOST_MARKET_ADDRESS,
-#           GHOST_VAULT_EIP712_VERSION=2  (V2 vault domain)
-# Optional: OPENAI_API_KEY, ORACLE_REASONING_MODEL, ACTIVE_ORACLE_AGENTS,
-#           WATCHED_MARKETS, WINDOW_POLL_MS
+cd oracle && npm install && cp .env.example .env
+# Required: SEPOLIA_RPC_URL, SEPOLIA_PRIVATE_KEY, contract addresses, GHOST_VAULT_EIP712_VERSION=2
+# Optional: OPENAI_API_KEY, ACTIVE_ORACLE_AGENTS, WATCHED_MARKETS
+
 npm run dev
-# HTTP: http://localhost:8092/oracle/health
-# WS:   ws://localhost:8092/oracle/ws/:marketId
+# http://localhost:8092/oracle/health
+# ws://localhost:8092/oracle/ws/:marketId
 ```
 
-The sealed-window watcher starts automatically and polls every 10 s.
-
-### 4. Web frontend
+### 3. Frontend
 
 ```bash
-cd web
-npm install
-cp .env.local.example .env.local
-# Fill in the NEXT_PUBLIC_* addresses from the deploy output,
-# NEXT_PUBLIC_PRIVY_APP_ID from privy.io,
-# NEXT_PUBLIC_SEPOLIA_RPC_URL,
-# NEXT_PUBLIC_ORACLE_URL=http://localhost:8092
-npm run dev
-# http://localhost:3000
+cd web && npm install && cp .env.local.example .env.local
+# Fill NEXT_PUBLIC_* contract addresses, NEXT_PUBLIC_PRIVY_APP_ID, NEXT_PUBLIC_ORACLE_URL
+
+npm run dev   # http://localhost:3000
 ```
 
-### 5. Optional: FastAPI orchestration layer
+<details>
+<summary><strong>Optional: FastAPI orchestration layer</strong></summary>
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r api/requirements.txt
-uvicorn api.main:app --reload
-# http://localhost:8000/docs
+uvicorn api.main:app --reload   # http://localhost:8000/docs
 ```
 
-The frontend works without this. It's an orchestration surface for relay/server-side flows that don't belong in the browser.
+The frontend works without this. It's an orchestration surface for relay / server-side flows.
+
+</details>
 
 ---
 
-## Testing
-
-### Smart-contract tests
+## 🧪 Tests
 
 ```bash
 cd contracts
-npx hardhat test --network hardhat       # mock FHE — fast (CI-friendly)
-npx hardhat test --network sepolia       # real FHE — slow, costs gas
+npx hardhat test --network hardhat   # mock FHE — fast, CI-friendly
+npx hardhat test --network sepolia   # real FHE coprocessor — slower, costs gas
 ```
 
-`@fhevm/hardhat-plugin` runs FHE in mock mode on the default Hardhat network so tests don't need the relayer. The suite covers:
+<details>
+<summary><strong>Full test coverage — GhostEAMM.test.ts</strong></summary>
 
 ```
-GhostEAMM
-  deployment            ✔ owner/marketManager/resolver set
-  createMarket          ✔ manager + owner authorised
-                        ✔ duplicate-market revert
-                        ✔ pool handles initialised to trivially-encrypted zero
-  placeBet              ✔ encrypted YES + NO bets accepted
-                        ✔ BetPlaced event has exactly 3 args, no amount
-                        ✔ self-decrypt of own position succeeds
-                        ✔ cross-decrypt of another user's position is rejected
-                        ✔ multi-bet accumulation in encrypted pool
-                        ✔ expired / non-existent market reverts
-  minimum-bet guard     ✔ MIN_BET_UNITS exposed, non-zero
-                        ✔ above-min records non-zero handle equal to amount
-                        ✔ below-min silently zeroed (no dust position)
-  resolveMarket         ✔ resolver + owner can resolve
-                        ✔ unauthorized revert
-                        ✔ double-resolve revert
-                        ✔ post-resolve placeBet revert
-  cancelMarket          ✔ resolver authorised, others revert
-  grantPositionAccess   ✔ winner-only ACL after YES resolution
-                        ✔ both-side ACL after cancellation
-                        ✔ rejects users with no position
-                        ✔ rejects active markets
-  sealed-bid windows    ✔ manager + owner open windows; non-manager reverts
-                        ✔ duration below MIN_WINDOW_SECS reverts
-                        ✔ second window while first pending reverts
-                        ✔ snapshot handles non-zero
-                        ✔ bets accepted during open window
-                        ✔ bets blocked between window expiry and settlement
-                        ✔ settle-before-expiry reverts
-                        ✔ resolver settles + decrypts pool ciphertexts after settle
-                        ✔ double-settle reverts
-                        ✔ bets re-open after settle
-                        ✔ publishWindowPrice emits PriceRevealed
-                        ✔ publish on unsettled window reverts
-                        ✔ getActiveWindowIdx returns max-uint when none / settled
-  admin                 ✔ Ownable2Step admin updates
-                        ✔ pause / unpause gate state changes
+placeBet          ✔ encrypted YES + NO bets accepted
+                  ✔ BetPlaced event has 3 args only — no amount field
+                  ✔ self-decrypt of own position correct
+                  ✔ cross-decrypt by another user rejected
+                  ✔ multi-bet accumulation in encrypted pool
+
+min-bet guard     ✔ above-min: stored handle equals original amount
+                  ✔ below-min: silently zeroed — no dust position
+
+resolveMarket     ✔ resolver / owner can resolve; others revert
+                  ✔ double-resolve reverts; post-resolve placeBet reverts
+
+grantPositionAccess ✔ winner-only ACL after YES resolution
+                  ✔ both sides granted after cancellation
+                  ✔ rejects users with no position; rejects active markets
+
+sealed windows    ✔ open → snapshot handles non-zero
+                  ✔ bets accepted during open window
+                  ✔ bets blocked between expiry and settlement
+                  ✔ settle-before-expiry reverts
+                  ✔ resolver decrypts pool ciphertexts after settle
+                  ✔ double-settle reverts; bets reopen after settle
+                  ✔ publishWindowPrice emits PriceRevealed
+                  ✔ publish on unsettled window reverts
+                  ✔ getActiveWindowIdx returns max-uint when no active window
+
+admin             ✔ pause / unpause gate all state changes
 ```
 
-### Oracle smoke test
-
-With the oracle running:
-
-```bash
-curl http://localhost:8092/oracle/health
-curl -X POST http://localhost:8092/oracle/resolve/21 -H 'content-type: application/json' \
-  -d '{"outcome": true, "marketTitle": "Will BTC trade above $150,000?"}'
-```
-
-Then open `/oracle?marketId=21` in the web app and watch the agents tick through `fetching → attesting → submitted → quorum → finalized` in real time.
+</details>
 
 ---
 
-## Operational Notes
+## 📋 Operational Notes
 
-- **Always full-deploy, don't single-redeploy.** `deploy-sepolia.ts` wires `GhostMarket → GhostEAMM` with `setMarketManager` + `setResolver`. Redeploying only the EAMM without also calling `GhostMarket.setEamm` (or using `scripts/redeploy-eamm.ts` which handles it) will leave metadata on one EAMM and encrypted state on another. Symptoms: bets land but `placeBet` reverts with `MarketNotFound`.
-- **The EIP-712 domain version is `"2"`.** `GhostVaultV2` uses `EIP712("GhostVault", "2")`. The oracle defaults to version `2`; set `GHOST_VAULT_EIP712_VERSION` only if pointing at the legacy v1 vault in `contracts/legacy/`.
-- **The settlement signer must equal the on-chain `settlementSigner`.** After redeploying the vault, run `scripts/update-settlement-signer.ts` if you want to use a different oracle key.
-- **Sealed windows need a watcher.** Add the market ID to `WATCHED_MARKETS` in `oracle/.env` and restart the oracle, or rely on dynamic discovery via the `SealedWindowOpened` event listener.
-- **Mainnet swap.** Replace the underlying USDC + cUSDC addresses with Circle USDC + a production ERC-7984 wrapper. Zero vault, EAMM, or frontend code changes required — only `.env` addresses.
-
----
-
-## Roadmap
-
-- **Multi-decimal markets.** `euint64` covers up to ~1.8 × 10^19 base units; future versions can stack `euint128` for jumbo positions.
-- **Permissioned ACL grants for regulators.** Selective disclosure to an auditor's hardware-bound key, on demand.
-- **TEE-based oracle agents.** Move LLM reasoning into attested enclaves so each agent's attestation is publicly verifiable, not just trusted.
-- **Per-market sealed-window scheduling.** Currently admin-triggered; can be automated on a fixed cadence or volume threshold.
-- **MEV-resistant payout claims.** Bundle the claim through a private relayer so the act of claiming doesn't itself broadcast the user's identity to mempool watchers.
+- **Always full-deploy.** `deploy-sepolia.ts` wires `GhostMarket → GhostEAMM` atomically. Redeploying only the EAMM without updating `GhostMarket.setEamm` leaves metadata and encrypted state on different contracts (`MarketNotFound` reverts on bets). Use `scripts/redeploy-eamm.ts` for EAMM-only upgrades — it handles the rewire.
+- **EIP-712 domain version is `"2"`.** `GhostVaultV2` uses `EIP712("GhostVault", "2")`. Set `GHOST_VAULT_EIP712_VERSION=2` in oracle `.env`.
+- **Sealed windows need a watcher.** Set `WATCHED_MARKETS=<id>` in `oracle/.env`, or rely on dynamic discovery via the `SealedWindowOpened` event listener.
+- **Mainnet swap.** Replace underlying USDC + cUSDC addresses with Circle USDC + a production ERC-7984 wrapper. Zero contract or frontend code changes needed.
 
 ---
 
-<div align="center">
+## 🛠 Tech Stack
 
-**The chain knows you bet. It does not know on what, in what size, or for how much.**
+| Layer | Stack |
+|:------|:------|
+| ![](https://img.shields.io/badge/-Frontend-7C3AED?style=flat-square) | Next.js 15 · React 19 · Tailwind v4 · viem v2 · Privy v3 |
+| ![](https://img.shields.io/badge/-FHE%20Client-412891?style=flat-square) | `@zama-fhe/relayer-sdk` · `fhevmjs` (browser-side encryption + ZKPoK) |
+| ![](https://img.shields.io/badge/-Contracts-363636?style=flat-square&logo=solidity&logoColor=white) | Solidity 0.8.26 · Hardhat · `@fhevm/solidity` · OpenZeppelin v5 |
+| ![](https://img.shields.io/badge/-Oracle-F59E0B?style=flat-square) | Node.js · Express · WebSockets · OpenAI gpt-4o-mini |
+| ![](https://img.shields.io/badge/-FHE%20Infrastructure-EF4444?style=flat-square) | Zama FHEVM coprocessor · KMS gateway · Sepolia relayer |
 
-That's the difference between a redacted form and a receipt that doesn't exist.
+---
 
-</div>
+<p align="center">
+  <img src="https://img.shields.io/badge/GhostMarket-Your%20size%20is%20yours%20alone-7C3AED?style=for-the-badge&labelColor=0f0f1a" />
+</p>
