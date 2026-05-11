@@ -61,7 +61,7 @@ GhostMarket is a binary prediction market where **no financial value ever exists
 
 The ERC-7984 cUSDC token holding all collateral literally cannot answer the question "how much does this user own?" The oracle signs over an *encrypted handle*, not a `uint256`. Two users can place bets in the same window and neither can infer the other's size from a price delta, because the price is frozen until the window closes.
 
-Combined with a **sealed-bid window** mechanism, a **7-agent AI oracle quorum** grounded in live exchange feeds, and **Privy walletless login**, this is what Polymarket would look like if the chain refused to publish your size.
+Combined with a **sealed-bid window** mechanism, a **4-agent AI oracle quorum** (3-of-4 majority; seven agent personas defined in code, configurable via `ACTIVE_ORACLE_AGENTS`) grounded in live exchange feeds, and **Privy walletless login**, this is what Polymarket would look like if the chain refused to publish your size.
 
 ### Problems Solved
 
@@ -70,7 +70,7 @@ Combined with a **sealed-bid window** mechanism, a **7-agent AI oracle quorum** 
 | ![](https://img.shields.io/badge/-Bet%20Size%20Leakage-EF4444?style=flat-square) | FHE encryption of every value | `euint64` ciphertexts in calldata, storage, events, and settlements |
 | ![](https://img.shields.io/badge/-Trust--Based%20Privacy-EF4444?style=flat-square) | Cryptographic ACL — no master key | Zama KMS re-encryption; nobody can read another user's position |
 | ![](https://img.shields.io/badge/-Probe--Bet%20Front--Running-F59E0B?style=flat-square) | Sealed-bid windows | Pool ACL withheld during window; all bets revealed atomically |
-| ![](https://img.shields.io/badge/-Single--Oracle%20Risk-F59E0B?style=flat-square) | 7-agent AI quorum | Each agent fetches a live CEX API, reasons via gpt-4o-mini, votes independently |
+| ![](https://img.shields.io/badge/-Single--Oracle%20Risk-F59E0B?style=flat-square) | 4-agent AI quorum (3-of-4) | Each active agent fetches a live CEX API, reasons via gpt-4o-mini, votes independently |
 | ![](https://img.shields.io/badge/-Oracle%20Forging%20Payouts-EF4444?style=flat-square) | Settlement over encrypted handle | Oracle signs `keccak(user, marketId, amountHandle, nonce, expiry)` |
 | ![](https://img.shields.io/badge/-Visible%20Collateral-3B82F6?style=flat-square) | ERC-7984 cUSDC custody | All balances and locks are `euint64` in `GhostVaultV2` |
 | ![](https://img.shields.io/badge/-Seed--Phrase%20Friction-8B5CF6?style=flat-square) | Privy embedded wallets | Google / email / passkey login — no mnemonic, no extension |
@@ -98,7 +98,7 @@ graph TB
 
     subgraph Oracle["🤖 Oracle Service (Node.js · port 8092)"]
         direction LR
-        AGT["<b>7 AI Agents</b><br/>Cipher · Specter · Wraith · Phantom<br/>Shade · Echo · Vex"]
+        AGT["<b>4 Active AI Agents</b> (7 defined)<br/>Cipher · Specter · Wraith · Phantom<br/>+ Shade · Echo · Vex if ACTIVE_ORACLE_AGENTS=7"]
         WATCHER["<b>Sealed-Window Watcher</b><br/>Settle → Zama KMS decrypt<br/>→ publishWindowPrice"]
         SIGNER["<b>Oracle Signer</b><br/>EIP-712 Claim(amountHandle)"]
     end
@@ -288,23 +288,24 @@ Replay protection: `usedNonces[user][marketId][nonce]`. Settlement TTL: 24 hours
 ## 🤖 Oracle Agent Quorum
 
 <p>
-  <img src="https://img.shields.io/badge/7%20agents%20defined-4%20active%20by%20default-F59E0B?style=flat-square" />
-  <img src="https://img.shields.io/badge/Quorum-floor(N%2F2)%2B1-F59E0B?style=flat-square" />
+  <img src="https://img.shields.io/badge/Active%20agents-4%20(default)-F59E0B?style=flat-square" />
+  <img src="https://img.shields.io/badge/Quorum-3--of--4-F59E0B?style=flat-square" />
+  <img src="https://img.shields.io/badge/Definitions%20in%20code-7%20(max)-64748b?style=flat-square" />
   <img src="https://img.shields.io/badge/Model-gpt--4o--mini-22c55e?style=flat-square" />
   <img src="https://img.shields.io/badge/Live%20API%20fetch-no%20pre--canned%20data-EF4444?style=flat-square" />
 </p>
 
-| Agent | Source | Personality |
-|:------|:-------|:------------|
-| ![](https://img.shields.io/badge/-Cipher-EF4444?style=flat-square) | Binance | Data-driven; only trusts top-tier CEX feeds |
-| ![](https://img.shields.io/badge/-Specter-3B82F6?style=flat-square) | CoinGecko | Cautious; high threshold before voting YES |
-| ![](https://img.shields.io/badge/-Wraith-8B5CF6?style=flat-square) | Chainlink / CryptoCompare | On-chain feeds preferred over off-chain |
-| ![](https://img.shields.io/badge/-Phantom-F59E0B?style=flat-square) | Coinbase | Contrarian; stress-tests the consensus |
-| ![](https://img.shields.io/badge/-Shade-22c55e?style=flat-square) | Kraken | Cross-reference consensus-seeker |
-| ![](https://img.shields.io/badge/-Echo-06B6D4?style=flat-square) | OKX | Volume-weighted aggregator |
-| ![](https://img.shields.io/badge/-Vex-64748b?style=flat-square) | Bybit | Adversarial; hunts manipulation and stale data |
+| Agent | Source | Personality | Default active? |
+|:------|:-------|:------------|:----------------|
+| ![](https://img.shields.io/badge/-Cipher-EF4444?style=flat-square) | Binance | Data-driven; only trusts top-tier CEX feeds | Yes (1) |
+| ![](https://img.shields.io/badge/-Specter-3B82F6?style=flat-square) | CoinGecko | Cautious; high threshold before voting YES | Yes (2) |
+| ![](https://img.shields.io/badge/-Wraith-8B5CF6?style=flat-square) | Chainlink / CryptoCompare | On-chain feeds preferred over off-chain | Yes (3) |
+| ![](https://img.shields.io/badge/-Phantom-F59E0B?style=flat-square) | Coinbase | Contrarian; stress-tests the consensus | Yes (4) |
+| ![](https://img.shields.io/badge/-Shade-22c55e?style=flat-square) | Kraken | Cross-reference consensus-seeker | Optional (5) |
+| ![](https://img.shields.io/badge/-Echo-06B6D4?style=flat-square) | OKX | Volume-weighted aggregator | Optional (6) |
+| ![](https://img.shields.io/badge/-Vex-64748b?style=flat-square) | Bybit | Adversarial; hunts manipulation and stale data | Optional (7) |
 
-Each agent: `fetching` (live API call, 6s timeout) → `attesting` (personality-specific gpt-4o-mini prompt with the real fetched value, JSON-only `{vote, reasoning}`) → `submitted`. On quorum: `resolveMarket` on Sepolia, settlement endpoint opens.
+Each active agent: `fetching` (live API call, 6s timeout) → `attesting` (personality-specific gpt-4o-mini prompt with the real fetched value, JSON-only `{vote, reasoning}`) → `submitted`. With the default **four** agents, quorum is **3-of-4** (`floor(N/2)+1`). Set `ACTIVE_ORACLE_AGENTS` up to `7` to use every definition (then quorum is 4-of-7). On quorum: `resolveMarket` on Sepolia, settlement endpoint opens.
 
 The **Oracle Room** (`/oracle`, ~1250 LOC) streams every agent's state, fetched price, live LLM reasoning, and on-chain tx hash via WebSocket. Every reasoning line is a real LLM response grounded in a real API call — nothing is pre-canned.
 
@@ -365,7 +366,7 @@ GhostMarket/
 │
 ├── 🤖 oracle/src/
 │   ├── index.ts                    — Express + WebSocket server (port 8092)
-│   ├── agents.ts                   — 7 agent personality definitions
+│   ├── agents.ts                   — 7 agent definitions; first 4 active by default (`ACTIVE_ORACLE_AGENTS`)
 │   ├── fetcher.ts                  — Live CEX / DeFiLlama / FRED fetchers (no API keys needed)
 │   ├── sealed-window-watcher.ts    — Settle expired windows → Zama KMS decrypt → publishWindowPrice
 │   ├── oracle-signer.ts            — EIP-712 sign Claim(user, marketId, amountHandle)
