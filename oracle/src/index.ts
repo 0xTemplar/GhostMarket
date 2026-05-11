@@ -34,6 +34,7 @@ import { createServer }               from 'http';
 import dotenv     from 'dotenv';
 
 import { buildAgents, agentDelay, AGENT_DEFINITIONS } from './agents';
+import { startSealedWindowWatcher } from './sealed-window-watcher';
 import { fetchSourceData, extractAsset, extractThreshold, type FetchedData } from './fetcher';
 import { resolveEammMarket }  from './eamm-resolver';
 import {
@@ -621,4 +622,9 @@ server.listen(PORT, () => {
   console.log(`WS   : ws://localhost:${PORT}/oracle/ws/:marketId`);
   console.log(`Active agents: ${ACTIVE_AGENT_COUNT} (quorum ${quorumThreshold(ACTIVE_AGENT_COUNT)})`);
   console.log(`\nOracle ready.\n`);
+
+  // Start the sealed-window watcher.  It polls every WINDOW_POLL_MS (default
+  // 10 s) for expired-but-unsettled windows, settles them on-chain, gateway-
+  // decrypts pool totals, and emits PriceRevealed.
+  startSealedWindowWatcher();
 });

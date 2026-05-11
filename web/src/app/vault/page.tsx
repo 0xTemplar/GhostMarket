@@ -16,8 +16,11 @@ import {
 import { useFlowAuth, useFlowWalletClient, usePrivyProvider } from '@/lib/privy/ghost-provider';
 import {
   readUsdcBalance,
+  readUsdcAllowance,
   readFreeBalanceHandles,
   readIsOperator,
+  approveUsdcForWrap,
+  wrapUsdcToCusdc,
   setOperatorUsdc,
   depositToVault,
   withdrawFromVault,
@@ -25,10 +28,19 @@ import {
   formatUsdc,
   GHOST_VAULT_ADDRESS,
   MOCK_USDC_ADDRESS,
+  CUSDC_MOCK_ADDRESS,
   publicClient,
 } from '@/lib/vault';
 
-type TxStatus = 'idle' | 'approving' | 'depositing' | 'pending' | 'success' | 'error';
+type TxStatus =
+  | 'idle'
+  | 'approving-wrap'   // step 1: approve MockUSDC for cUSDCMock
+  | 'wrapping'         // step 2: wrap MockUSDC → cUSDC
+  | 'approving'        // step 3: set vault as operator on cUSDCMock
+  | 'depositing'       // step 4: encrypt + deposit cUSDC
+  | 'pending'
+  | 'success'
+  | 'error';
 
 interface TxState {
   status: TxStatus;
@@ -162,33 +174,49 @@ export default function VaultPage() {
     [vaultBalance, freeBalance],
   );
 
-  // ── Deposit ────────────────────────────────────────────────────────────────
+  // ── Deposit (wrap USDC → cUSDC → vault) ──────────────────────────────────
   async function handleDeposit() {
     if (!depositAmount || !user.evmAddress || !walletClient) return;
     const amount = parseUsdc(depositAmount);
     if (amount === 0n) return;
 
+    const addr   = user.evmAddress as `0x${string}`;
     const hashes: string[] = [];
+
     try {
-      // Step 1 — check operator status and set if needed
-      const isOperator = await readIsOperator(
-        user.evmAddress as `0x${string}`,
-        GHOST_VAULT_ADDRESS,
-      );
-      if (!isOperator) {
-        setDepositTx({ status: 'approving' });
-        const approveTx = await setOperatorUsdc(walletClient);
+      // Step 1 — approve MockUSDC for cUSDCMock (wrap gateway) if needed
+      const allowance = await readUsdcAllowance(addr, CUSDC_MOCK_ADDRESS);
+      if (allowance < amount) {
+        setDepositTx({ status: 'approving-wrap' });
+        const approveTx = await approveUsdcForWrap(walletClient, amount);
         hashes.push(approveTx);
         await publicClient.waitForTransactionReceipt({ hash: approveTx });
       }
 
-      // Step 2 — encrypt amount
+      // Step 2 — wrap MockUSDC → cUSDC
+      setDepositTx({ status: 'wrapping' });
+      const wrapTx = await wrapUsdcToCusdc(walletClient, addr, amount);
+      hashes.push(wrapTx);
+      await publicClient.waitForTransactionReceipt({ hash: wrapTx });
+
+      // Step 3 — set vault as operator on cUSDCMock (once per user)
+      const isOperator = await readIsOperator(addr, GHOST_VAULT_ADDRESS);
+      if (!isOperator) {
+        setDepositTx({ status: 'approving' });
+        const operatorTx = await setOperatorUsdc(walletClient);
+        hashes.push(operatorTx);
+        await publicClient.waitForTransactionReceipt({ hash: operatorTx });
+      }
+
+      // Step 4 — encrypt & deposit cUSDC into the vault.
+      // Proof targets GHOST_VAULT_ADDRESS because GhostVaultV2.deposit calls
+      // FHE.fromExternal itself, then passes the euint64 handle (no proof)
+      // to cUSDCMock.confidentialTransferFrom.
       setDepositTx({ status: 'depositing' });
       if (!privyProvider) throw new Error('Wallet provider not ready');
       const { encryptBetInput } = await import('@/lib/eamm');
-      const encrypted = await encryptBetInput(privyProvider, GHOST_VAULT_ADDRESS, user.evmAddress as `0x${string}`, amount);
+      const encrypted = await encryptBetInput(privyProvider, GHOST_VAULT_ADDRESS, addr, amount);
 
-      // Step 3 — deposit
       const depositTxHash = await depositToVault(walletClient, encrypted.handle, encrypted.inputProof);
       hashes.push(depositTxHash);
       await publicClient.waitForTransactionReceipt({ hash: depositTxHash });
@@ -309,14 +337,14 @@ export default function VaultPage() {
 
       {/* Balance card */}
       <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-6">
-        <p className="text-xs text-slate-500 uppercase tracking-widest mb-1">Available balance</p>
+        <p className="text-xs text-slate-500 uppercase tracking-widest mb-1">Available cUSDC (vault)</p>
         <div className="flex items-end gap-3 min-h-11">
           {freeBalance !== null ? (
             <>
               <span className="text-4xl font-bold text-white tabular-nums">
                 {Number(formatUsdc(freeBalance)).toFixed(2)}
               </span>
-              <span className="text-slate-400 mb-1 text-lg">USDC</span>
+              <span className="text-slate-400 mb-1 text-lg">cUSDC</span>
             </>
           ) : isDecrypting ? (
             <span className="flex items-center gap-2 text-slate-400 text-sm">
@@ -342,7 +370,7 @@ export default function VaultPage() {
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
             <span className="text-xs text-amber-300/80">
               <span className="font-mono font-semibold text-amber-300">
-                {Number(formatUsdc(lockedAmount)).toFixed(2)} USDC
+                {Number(formatUsdc(lockedAmount)).toFixed(2)} cUSDC
               </span>
               {' '}locked as collateral for active bets
             </span>
@@ -390,7 +418,7 @@ export default function VaultPage() {
       {/* Deposit */}
       <UsdcActionCard
         title="Deposit"
-        description="Add USDC to your vault to place shielded bets. Approve once, then deposit."
+        description="Wraps your USDC into confidential cUSDC, then deposits it into the vault. Your balance is encrypted end-to-end."
         icon={<ArrowDownToLine className="w-5 h-5" strokeWidth={1.5} />}
         color="indigo"
         amount={depositAmount}
@@ -399,8 +427,10 @@ export default function VaultPage() {
         tx={depositTx}
         onReset={() => setDepositTx({ status: 'idle' })}
         submitLabel={
-          depositTx.status === 'approving' ? 'Approving…'
-          : depositTx.status === 'depositing' ? 'Depositing…'
+          depositTx.status === 'approving-wrap' ? 'Approving…'
+          : depositTx.status === 'wrapping'     ? 'Wrapping…'
+          : depositTx.status === 'approving'    ? 'Authorising…'
+          : depositTx.status === 'depositing'   ? 'Depositing…'
           : 'Deposit'
         }
         placeholder="0.00"
@@ -409,7 +439,7 @@ export default function VaultPage() {
       {/* Withdraw */}
       <UsdcActionCard
         title="Withdraw"
-        description="Move USDC from your vault back to your wallet."
+        description="Move cUSDC from your vault back to your wallet."
         icon={<ArrowUpFromLine className="w-5 h-5" strokeWidth={1.5} />}
         color="slate"
         amount={withdrawAmount}
@@ -457,7 +487,7 @@ function UsdcActionCard({
   disabled,
 }: UsdcActionCardProps) {
   const accent = color === 'indigo' ? 'indigo' : 'slate';
-  const isPending = tx.status === 'approving' || tx.status === 'depositing' || tx.status === 'pending';
+  const isPending = tx.status === 'approving-wrap' || tx.status === 'wrapping' || tx.status === 'approving' || tx.status === 'depositing' || tx.status === 'pending';
 
   return (
     <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-6 space-y-4">
@@ -475,17 +505,29 @@ function UsdcActionCard({
         </div>
       </div>
 
-      {/* Approve progress indicator */}
+      {/* Step progress indicators */}
+      {tx.status === 'approving-wrap' && (
+        <div className="flex items-center gap-2 text-xs text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-lg px-3 py-2">
+          <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+          Step 1 — approving USDC for wrap…
+        </div>
+      )}
+      {tx.status === 'wrapping' && (
+        <div className="flex items-center gap-2 text-xs text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-lg px-3 py-2">
+          <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+          Step 2 — wrapping USDC → cUSDC…
+        </div>
+      )}
       {tx.status === 'approving' && (
         <div className="flex items-center gap-2 text-xs text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-lg px-3 py-2">
           <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-          Step 1 of 2 — approving USDC spend…
+          Step 3 — authorising vault as operator…
         </div>
       )}
       {tx.status === 'depositing' && (
         <div className="flex items-center gap-2 text-xs text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-lg px-3 py-2">
           <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-          Step 2 of 2 — depositing USDC to vault…
+          Step 4 — encrypting &amp; depositing cUSDC…
         </div>
       )}
 

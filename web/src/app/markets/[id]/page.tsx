@@ -2,7 +2,7 @@
 
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
   ArrowLeft, Clock, Users, BarChart3, Droplets, Shield, ExternalLink,
@@ -22,7 +22,10 @@ import {
 } from '@/lib/market';
 import {
   readEammPositionHandles, readEammMarketMeta, isEammDeployed,
+  readActiveWindow, subscribePriceRevealed, subscribeSealedWindowOpened,
+  type SealedWindowInfo, type PriceRevealedEvent,
 } from '@/lib/eamm';
+import { SealedCountdown } from '@/components/sealed-countdown';
 import {
   readLockedAmountHandle, readIsMarketResolved,
   GHOST_VAULT_ADDRESS, publicClient,
@@ -335,6 +338,13 @@ export default function MarketDetailPage() {
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState<string | null>(null);
 
+  // ── Sealed-bid window state ──────────────────────────────────────────────────
+  const [activeWindow,    setActiveWindow]    = useState<SealedWindowInfo | null>(null);
+  const [revealedEvent,   setRevealedEvent]   = useState<PriceRevealedEvent | null>(null);
+  const [windowSettling,  setWindowSettling]  = useState(false);
+  // Snapshot prices captured at window-open time (frozen in UI during window).
+  const snapshotRef = useRef<{ yes: number; no: number } | null>(null);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -392,6 +402,65 @@ export default function MarketDetailPage() {
     return () => { cancelled = true; };
   }, [id]);
 
+  // ── Sealed-window polling + event subscriptions ─────────────────────────────
+  useEffect(() => {
+    if (!isNumericId(id) || !isEammDeployed()) return;
+    const marketId = Number(id);
+
+    let cancelled = false;
+
+    // Initial fetch
+    (async () => {
+      try {
+        const win = await readActiveWindow(marketId);
+        if (!cancelled) setActiveWindow(win);
+      } catch { /* non-fatal */ }
+    })();
+
+    // Poll every 5 s for window state changes (window opens / settling starts)
+    const pollId = setInterval(async () => {
+      try {
+        const win = await readActiveWindow(marketId);
+        if (!cancelled) setActiveWindow(win);
+      } catch { /* non-fatal */ }
+    }, 5_000);
+
+    // Subscribe to new windows opening so we capture the snapshot price.
+    const unsubOpen = subscribeSealedWindowOpened(marketId, () => {
+      if (cancelled) return;
+      // Capture current market prices as the "frozen" snapshot.
+      setMarket((prev) => {
+        if (prev) {
+          snapshotRef.current = {
+            yes: Math.round(prev.yesPrice * 100),
+            no:  Math.round(prev.noPrice  * 100),
+          };
+        }
+        return prev;
+      });
+      // Refresh the active window object.
+      readActiveWindow(marketId)
+        .then((w) => { if (!cancelled) setActiveWindow(w); })
+        .catch(() => undefined);
+    });
+
+    // Subscribe to price reveals.
+    const unsubReveal = subscribePriceRevealed(marketId, (ev) => {
+      if (!cancelled) {
+        setRevealedEvent(ev);
+        setWindowSettling(false);
+        setActiveWindow(null);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      clearInterval(pollId);
+      unsubOpen();
+      unsubReveal();
+    };
+  }, [id]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-40">
@@ -424,7 +493,8 @@ export default function MarketDetailPage() {
   const statusMap: Record<string, string> = {
     active: 'Active', resolved: 'Resolved', disputed: 'Disputed', pending: 'Pending',
   };
-  const canBet = market.status === 'active' && !marketFullyPriced && !sepoliaClosed;
+  // Bets blocked when a sealed window has expired but not yet been settled.
+  const canBet = market.status === 'active' && !marketFullyPriced && !sepoliaClosed && !windowSettling;
   const recentActivity = buildRecentActivity(market);
   const relatedMarkets = mockMarkets
     .filter((m) => m.category === market.category && m.id !== market.id)
@@ -694,6 +764,19 @@ export default function MarketDetailPage() {
                   />
                 </div>
 
+                {/* Sealed-window overlay */}
+                {(activeWindow || revealedEvent) && (
+                  <div className="mb-4">
+                    <SealedCountdown
+                      window={activeWindow}
+                      revealed={revealedEvent}
+                      snapshotYes={snapshotRef.current?.yes ?? yesPct}
+                      snapshotNo={snapshotRef.current?.no  ?? noPct}
+                      onWindowExpired={() => setWindowSettling(true)}
+                    />
+                  </div>
+                )}
+
                 {canBet ? (
                   <div className="space-y-2">
                     <button
@@ -717,6 +800,8 @@ export default function MarketDetailPage() {
                       <p className="text-sm text-slate-400">
                         {market.status === 'resolved'
                           ? `Market resolved — ${rawMarket?.outcome ? 'YES' : 'NO'} won.`
+                          : windowSettling
+                          ? 'Bets paused — oracle is settling the sealed window.'
                           : sepoliaClosed
                           ? 'This market is closed on Sepolia and no longer accepts orders.'
                           : marketFullyPriced

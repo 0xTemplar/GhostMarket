@@ -28,6 +28,69 @@ export const GHOST_EAMM_ADDRESS = (
   process.env.NEXT_PUBLIC_GHOST_EAMM_ADDRESS ?? ''
 ) as `0x${string}`;
 
+// ─── Sealed-window ABI fragment ───────────────────────────────────────────────
+
+export const SEALED_WINDOW_ABI = [
+  {
+    name: 'getSealedWindowCount',
+    type: 'function',
+    stateMutability: 'view',
+    inputs:  [{ name: 'marketId', type: 'uint256' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'getSealedWindow',
+    type: 'function',
+    stateMutability: 'view',
+    inputs:  [
+      { name: 'marketId',  type: 'uint256' },
+      { name: 'windowIdx', type: 'uint256' },
+    ],
+    outputs: [
+      { name: 'startsAt',        type: 'uint64'  },
+      { name: 'endsAt',          type: 'uint64'  },
+      { name: 'settled',         type: 'bool'    },
+      { name: 'yesPoolSnapshot', type: 'bytes32' },
+      { name: 'noPoolSnapshot',  type: 'bytes32' },
+    ],
+  },
+  {
+    name: 'getActiveWindowIdx',
+    type: 'function',
+    stateMutability: 'view',
+    inputs:  [{ name: 'marketId', type: 'uint256' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'SealedWindowOpened',
+    type: 'event',
+    inputs: [
+      { name: 'marketId',  type: 'uint256', indexed: true  },
+      { name: 'windowIdx', type: 'uint256', indexed: false },
+      { name: 'startsAt',  type: 'uint64',  indexed: false },
+      { name: 'endsAt',    type: 'uint64',  indexed: false },
+    ],
+  },
+  {
+    name: 'SealedWindowSettled',
+    type: 'event',
+    inputs: [
+      { name: 'marketId',  type: 'uint256', indexed: true  },
+      { name: 'windowIdx', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    name: 'PriceRevealed',
+    type: 'event',
+    inputs: [
+      { name: 'marketId',  type: 'uint256', indexed: true  },
+      { name: 'windowIdx', type: 'uint256', indexed: true  },
+      { name: 'yesTotal',  type: 'uint64',  indexed: false },
+      { name: 'noTotal',   type: 'uint64',  indexed: false },
+    ],
+  },
+] as const;
+
 export const GHOST_EAMM_ABI = [
   // Write
   {
@@ -324,6 +387,163 @@ export async function readEammMarketMeta(marketId: number): Promise<EammMarketMe
   }) as [number, boolean, bigint];
 
   return { status, outcome, expiryAt: Number(expiryAt) };
+}
+
+// ─── Sealed-window read helpers ───────────────────────────────────────────────
+
+export interface SealedWindowInfo {
+  windowIdx:       number;
+  startsAt:        number;   // unix seconds
+  endsAt:          number;   // unix seconds
+  settled:         boolean;
+  yesPoolSnapshot: `0x${string}`;
+  noPoolSnapshot:  `0x${string}`;
+}
+
+/**
+ * Fetch all sealed windows for a market.
+ * Returns an empty array if no windows have ever been opened.
+ */
+export async function readSealedWindows(marketId: number): Promise<SealedWindowInfo[]> {
+  const count = await zamaPublicClient.readContract({
+    address:      GHOST_EAMM_ADDRESS,
+    abi:          SEALED_WINDOW_ABI,
+    functionName: 'getSealedWindowCount',
+    args:         [BigInt(marketId)],
+  }) as bigint;
+
+  if (count === 0n) return [];
+
+  const windows = await Promise.all(
+    Array.from({ length: Number(count) }, (_, i) =>
+      zamaPublicClient.readContract({
+        address:      GHOST_EAMM_ADDRESS,
+        abi:          SEALED_WINDOW_ABI,
+        functionName: 'getSealedWindow',
+        args:         [BigInt(marketId), BigInt(i)],
+      }) as Promise<[bigint, bigint, boolean, `0x${string}`, `0x${string}`]>,
+    ),
+  );
+
+  return windows.map(([startsAt, endsAt, settled, yesPoolSnapshot, noPoolSnapshot], i) => ({
+    windowIdx:       i,
+    startsAt:        Number(startsAt),
+    endsAt:          Number(endsAt),
+    settled,
+    yesPoolSnapshot,
+    noPoolSnapshot,
+  }));
+}
+
+/**
+ * Returns the active (open, not yet expired) window for a market, or null.
+ *
+ * Uses the `getActiveWindowIdx` view to avoid fetching the full window list
+ * on every poll.  Returns null when no active window exists.
+ */
+export async function readActiveWindow(marketId: number): Promise<SealedWindowInfo | null> {
+  const MAX_IDX = (2n ** 256n) - 1n;
+
+  const idx = await zamaPublicClient.readContract({
+    address:      GHOST_EAMM_ADDRESS,
+    abi:          SEALED_WINDOW_ABI,
+    functionName: 'getActiveWindowIdx',
+    args:         [BigInt(marketId)],
+  }) as bigint;
+
+  if (idx === MAX_IDX) return null;
+
+  const [startsAt, endsAt, settled, yesPoolSnapshot, noPoolSnapshot] =
+    await zamaPublicClient.readContract({
+      address:      GHOST_EAMM_ADDRESS,
+      abi:          SEALED_WINDOW_ABI,
+      functionName: 'getSealedWindow',
+      args:         [BigInt(marketId), idx],
+    }) as [bigint, bigint, boolean, `0x${string}`, `0x${string}`];
+
+  return {
+    windowIdx:       Number(idx),
+    startsAt:        Number(startsAt),
+    endsAt:          Number(endsAt),
+    settled,
+    yesPoolSnapshot,
+    noPoolSnapshot,
+  };
+}
+
+export interface PriceRevealedEvent {
+  windowIdx: number;
+  yesTotal:  bigint;
+  noTotal:   bigint;
+}
+
+/**
+ * Subscribe to `PriceRevealed` events for a market.
+ *
+ * The callback fires each time the oracle publishes post-window pool totals.
+ * Returns an unsubscribe function.
+ *
+ * Usage:
+ *   const unsub = subscribePriceRevealed(marketId, (ev) => animateReveal(ev));
+ *   // later:
+ *   unsub();
+ */
+export function subscribePriceRevealed(
+  marketId: number,
+  onReveal: (event: PriceRevealedEvent) => void,
+): () => void {
+  const unwatch = zamaPublicClient.watchContractEvent({
+    address:   GHOST_EAMM_ADDRESS,
+    abi:       SEALED_WINDOW_ABI,
+    eventName: 'PriceRevealed',
+    args:      { marketId: BigInt(marketId) },
+    onLogs: (logs) => {
+      for (const log of logs) {
+        const { windowIdx, yesTotal, noTotal } = log.args as {
+          windowIdx: bigint;
+          yesTotal:  bigint;
+          noTotal:   bigint;
+        };
+        onReveal({
+          windowIdx: Number(windowIdx),
+          yesTotal,
+          noTotal,
+        });
+      }
+    },
+  });
+  return unwatch;
+}
+
+/**
+ * Subscribe to `SealedWindowOpened` events for a market.
+ * Fires when the admin opens a new sealed window.
+ */
+export function subscribeSealedWindowOpened(
+  marketId: number,
+  onOpen: (window: Omit<SealedWindowInfo, 'settled' | 'yesPoolSnapshot' | 'noPoolSnapshot'>) => void,
+): () => void {
+  const unwatch = zamaPublicClient.watchContractEvent({
+    address:   GHOST_EAMM_ADDRESS,
+    abi:       SEALED_WINDOW_ABI,
+    eventName: 'SealedWindowOpened',
+    args:      { marketId: BigInt(marketId) },
+    onLogs: (logs) => {
+      for (const log of logs) {
+        const { windowIdx, startsAt, endsAt } = log.args as {
+          windowIdx: bigint;
+          startsAt:  bigint;
+          endsAt:    bigint;
+        };
+        onOpen({
+          windowIdx: Number(windowIdx),
+          startsAt:  Number(startsAt),
+          endsAt:    Number(endsAt),
+        });
+      }
+    },
+  });
+  return unwatch;
 }
 
 // ─── Convenience: build a WalletClient for Zama devnet from Privy provider ───

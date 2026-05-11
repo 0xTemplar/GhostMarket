@@ -95,15 +95,31 @@ contract GhostVaultV2 is ZamaEthereumConfig, ReentrancyGuard, Pausable, Ownable2
 
     /**
      * @notice Deposit cUSDC into the vault.
-     *         Caller must have set this contract as an operator on the token.
+     *
+     * The caller must have set this contract as an operator on the token before
+     * calling. The proof must be generated for THIS contract (GhostVaultV2), not
+     * for the cUSDC token. The vault:
+     *   1. Verifies the ZKPoK here (FHE.fromExternal targets this contract).
+     *   2. Grants itself ACL access so it can pass the handle to cUSDC.
+     *   3. Calls the no-proof confidentialTransferFrom overload on the token.
      */
     function deposit(externalEuint64 encAmount, bytes calldata proof) external nonReentrant whenNotPaused {
-        euint64 amount = collateral.confidentialTransferFrom(msg.sender, address(this), encAmount, proof);
+        // Step 1: verify ZKPoK in this contract — proof must be created for GhostVaultV2.
+        euint64 amount = FHE.fromExternal(encAmount, proof);
+        // Step 2: grant this contract ACL permission so the isAllowed check in
+        //         confidentialTransferFrom passes.
+        FHE.allowThis(amount);
+        // Step 3: grant the collateral token ACL permission so it can use the handle
+        //         in its internal FHE operations (e.g. FHE.sub(balance, amount)).
+        FHE.allow(amount, address(collateral));
+        // Step 4: use the euint64 (no-proof) overload — vault is operator and both
+        //         GhostVaultV2 and cUSDCMock now have ACL access to the handle.
+        euint64 transferred = collateral.confidentialTransferFrom(msg.sender, address(this), amount);
         
         if (FHE.isInitialized(_balances[msg.sender])) {
-            _balances[msg.sender] = FHE.add(_balances[msg.sender], amount);
+            _balances[msg.sender] = FHE.add(_balances[msg.sender], transferred);
         } else {
-            _balances[msg.sender] = amount;
+            _balances[msg.sender] = transferred;
         }
         FHE.allowThis(_balances[msg.sender]);
         FHE.allow(_balances[msg.sender], msg.sender);

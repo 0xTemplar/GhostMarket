@@ -18,6 +18,7 @@
 import { GhostEAMM, GhostEAMM__factory } from '../typechain-types';
 import { FhevmType } from '@fhevm/hardhat-plugin';
 import { HardhatEthersSigner } from '@nomicfoundation/hardhat-ethers/signers';
+import { anyValue } from '@nomicfoundation/hardhat-chai-matchers/withArgs';
 import { expect } from 'chai';
 import { ethers, fhevm } from 'hardhat';
 
@@ -517,6 +518,224 @@ describe('GhostEAMM', function () {
       // Note: FHE.isInitialized returns true once the slot is written, even if
       // the value is 0. This is expected behaviour — the guard zeroes the value,
       // it does not prevent the slot write.
+    });
+  });
+
+  // ── Sealed-bid windows ────────────────────────────────────────────────────
+
+  describe('sealed-bid windows', () => {
+    const WINDOW_SECS = 60n; // 60 s window for tests
+
+    beforeEach(async () => {
+      await eamm.connect(manager).createMarket(MARKET_ID, EXPIRY_1H);
+    });
+
+    // ── openSealedWindow ────────────────────────────────────────────────────
+
+    it('manager can open a sealed window', async () => {
+      await expect(
+        eamm.connect(manager).openSealedWindow(MARKET_ID, WINDOW_SECS),
+      ).to.emit(eamm, 'SealedWindowOpened').withArgs(
+        MARKET_ID,
+        0n,        // first window idx
+        anyValue,  // startsAt (dynamic — block.timestamp)
+        anyValue,  // endsAt   (dynamic — block.timestamp + durationSecs)
+      );
+
+      expect(await eamm.getSealedWindowCount(MARKET_ID)).to.equal(1n);
+    });
+
+    it('owner can open a sealed window', async () => {
+      await expect(
+        eamm.connect(owner).openSealedWindow(MARKET_ID, WINDOW_SECS),
+      ).to.emit(eamm, 'SealedWindowOpened');
+    });
+
+    it('non-manager cannot open a sealed window', async () => {
+      await expect(
+        eamm.connect(alice).openSealedWindow(MARKET_ID, WINDOW_SECS),
+      ).to.be.revertedWithCustomError(eamm, 'Unauthorized');
+    });
+
+    it('reverts if duration is below MIN_WINDOW_SECS', async () => {
+      await expect(
+        eamm.connect(manager).openSealedWindow(MARKET_ID, 10n),
+      ).to.be.revertedWithCustomError(eamm, 'DurationTooShort');
+    });
+
+    it('cannot open a second window while first is still pending settlement', async () => {
+      await eamm.connect(manager).openSealedWindow(MARKET_ID, WINDOW_SECS);
+      await expect(
+        eamm.connect(manager).openSealedWindow(MARKET_ID, WINDOW_SECS),
+      ).to.be.revertedWithCustomError(eamm, 'WindowStillPending');
+    });
+
+    it('snapshots pool handles at open time (non-zero for initialised pools)', async () => {
+      await eamm.connect(manager).openSealedWindow(MARKET_ID, WINDOW_SECS);
+      const [, , , yesSnap, noSnap] = await eamm.getSealedWindow(MARKET_ID, 0n);
+      // Pools were initialised to FHE.asEuint64(0) — handles are non-zero ciphertexts.
+      expect(yesSnap).to.not.equal(ethers.ZeroHash);
+      expect(noSnap).to.not.equal(ethers.ZeroHash);
+    });
+
+    // ── Bets during window ──────────────────────────────────────────────────
+
+    it('bets are accepted during an open window', async () => {
+      await eamm.connect(manager).openSealedWindow(MARKET_ID, WINDOW_SECS);
+
+      const enc = await fhevm
+        .createEncryptedInput(eammAddress, alice.address)
+        .add64(ONE_ETH)
+        .encrypt();
+
+      // Should succeed — window is open, not yet expired.
+      await expect(
+        eamm.connect(alice).placeBet(MARKET_ID, true, enc.handles[0], enc.inputProof),
+      ).to.emit(eamm, 'BetPlaced');
+    });
+
+    // ── Settlement pending guard ────────────────────────────────────────────
+
+    it('blocks bets when window has expired but not yet settled', async () => {
+      // Open a very short window (minimum 30 s) then warp past it.
+      const MIN_SECS = await eamm.MIN_WINDOW_SECS();
+      await eamm.connect(manager).openSealedWindow(MARKET_ID, MIN_SECS);
+
+      // Advance Hardhat time past the window end.
+      await ethers.provider.send('evm_increaseTime', [Number(MIN_SECS) + 1]);
+      await ethers.provider.send('evm_mine', []);
+
+      const enc = await fhevm
+        .createEncryptedInput(eammAddress, alice.address)
+        .add64(ONE_ETH)
+        .encrypt();
+
+      await expect(
+        eamm.connect(alice).placeBet(MARKET_ID, true, enc.handles[0], enc.inputProof),
+      ).to.be.revertedWithCustomError(eamm, 'WindowSettlementPending');
+    });
+
+    // ── settleSealedWindow ──────────────────────────────────────────────────
+
+    it('cannot settle before the window expires', async () => {
+      await eamm.connect(manager).openSealedWindow(MARKET_ID, WINDOW_SECS);
+      await expect(
+        eamm.connect(resolver).settleSealedWindow(MARKET_ID, 0n),
+      ).to.be.revertedWithCustomError(eamm, 'WindowNotExpired');
+    });
+
+    it('resolver can settle an expired window', async () => {
+      const MIN_SECS = await eamm.MIN_WINDOW_SECS();
+      await eamm.connect(manager).openSealedWindow(MARKET_ID, MIN_SECS);
+
+      await ethers.provider.send('evm_increaseTime', [Number(MIN_SECS) + 1]);
+      await ethers.provider.send('evm_mine', []);
+
+      await expect(
+        eamm.connect(resolver).settleSealedWindow(MARKET_ID, 0n),
+      ).to.emit(eamm, 'SealedWindowSettled').withArgs(MARKET_ID, 0n);
+
+      const [, , settled] = await eamm.getSealedWindow(MARKET_ID, 0n);
+      expect(settled).to.be.true;
+    });
+
+    it('cannot settle the same window twice', async () => {
+      const MIN_SECS = await eamm.MIN_WINDOW_SECS();
+      await eamm.connect(manager).openSealedWindow(MARKET_ID, MIN_SECS);
+
+      await ethers.provider.send('evm_increaseTime', [Number(MIN_SECS) + 1]);
+      await ethers.provider.send('evm_mine', []);
+
+      await eamm.connect(resolver).settleSealedWindow(MARKET_ID, 0n);
+      await expect(
+        eamm.connect(resolver).settleSealedWindow(MARKET_ID, 0n),
+      ).to.be.revertedWithCustomError(eamm, 'WindowAlreadySettled');
+    });
+
+    it('resolver can decrypt pool handles after settlement (settle-grants-decrypt)', async () => {
+      // Alice bets YES before the window opens — pool has some ciphertext.
+      const preEnc = await fhevm
+        .createEncryptedInput(eammAddress, alice.address)
+        .add64(ONE_ETH)
+        .encrypt();
+      await eamm.connect(alice).placeBet(MARKET_ID, true, preEnc.handles[0], preEnc.inputProof);
+
+      // Open window, warp, settle.
+      const MIN_SECS = await eamm.MIN_WINDOW_SECS();
+      await eamm.connect(manager).openSealedWindow(MARKET_ID, MIN_SECS);
+      await ethers.provider.send('evm_increaseTime', [Number(MIN_SECS) + 1]);
+      await ethers.provider.send('evm_mine', []);
+      await eamm.connect(resolver).settleSealedWindow(MARKET_ID, 0n);
+
+      // Resolver can now decrypt the YES pool.
+      const [yesHandle] = await eamm.getPoolHandles(MARKET_ID);
+      const decryptedYes = await fhevm.userDecryptEuint(
+        FhevmType.euint64,
+        yesHandle,
+        eammAddress,
+        resolver,
+      );
+      expect(decryptedYes).to.equal(ONE_ETH);
+    });
+
+    it('bets re-open after a window is settled', async () => {
+      const MIN_SECS = await eamm.MIN_WINDOW_SECS();
+      await eamm.connect(manager).openSealedWindow(MARKET_ID, MIN_SECS);
+      await ethers.provider.send('evm_increaseTime', [Number(MIN_SECS) + 1]);
+      await ethers.provider.send('evm_mine', []);
+      await eamm.connect(resolver).settleSealedWindow(MARKET_ID, 0n);
+
+      const enc = await fhevm
+        .createEncryptedInput(eammAddress, alice.address)
+        .add64(ONE_ETH)
+        .encrypt();
+      await expect(
+        eamm.connect(alice).placeBet(MARKET_ID, true, enc.handles[0], enc.inputProof),
+      ).to.emit(eamm, 'BetPlaced');
+    });
+
+    // ── publishWindowPrice ──────────────────────────────────────────────────
+
+    it('resolver can publish decrypted price after settlement', async () => {
+      const MIN_SECS = await eamm.MIN_WINDOW_SECS();
+      await eamm.connect(manager).openSealedWindow(MARKET_ID, MIN_SECS);
+      await ethers.provider.send('evm_increaseTime', [Number(MIN_SECS) + 1]);
+      await ethers.provider.send('evm_mine', []);
+      await eamm.connect(resolver).settleSealedWindow(MARKET_ID, 0n);
+
+      await expect(
+        eamm.connect(resolver).publishWindowPrice(MARKET_ID, 0n, 5_000_000n, 3_000_000n),
+      ).to.emit(eamm, 'PriceRevealed').withArgs(MARKET_ID, 0n, 5_000_000n, 3_000_000n);
+    });
+
+    it('cannot publish price for an unsettled window', async () => {
+      await eamm.connect(manager).openSealedWindow(MARKET_ID, WINDOW_SECS);
+      await expect(
+        eamm.connect(resolver).publishWindowPrice(MARKET_ID, 0n, 0n, 0n),
+      ).to.be.revertedWithCustomError(eamm, 'WindowNotExpired');
+    });
+
+    // ── getActiveWindowIdx ──────────────────────────────────────────────────
+
+    it('getActiveWindowIdx returns max uint when no window exists', async () => {
+      const MAX = (2n ** 256n) - 1n;
+      expect(await eamm.getActiveWindowIdx(MARKET_ID)).to.equal(MAX);
+    });
+
+    it('getActiveWindowIdx returns the current window index when active', async () => {
+      await eamm.connect(manager).openSealedWindow(MARKET_ID, WINDOW_SECS);
+      expect(await eamm.getActiveWindowIdx(MARKET_ID)).to.equal(0n);
+    });
+
+    it('getActiveWindowIdx returns max uint after a window is settled', async () => {
+      const MIN_SECS = await eamm.MIN_WINDOW_SECS();
+      await eamm.connect(manager).openSealedWindow(MARKET_ID, MIN_SECS);
+      await ethers.provider.send('evm_increaseTime', [Number(MIN_SECS) + 1]);
+      await ethers.provider.send('evm_mine', []);
+      await eamm.connect(resolver).settleSealedWindow(MARKET_ID, 0n);
+
+      const MAX = (2n ** 256n) - 1n;
+      expect(await eamm.getActiveWindowIdx(MARKET_ID)).to.equal(MAX);
     });
   });
 

@@ -256,6 +256,45 @@ import { CUSDC_MOCK_ABI } from './cusdc';
 // ─── USDC write helper ────────────────────────────────────────────────────────
 
 /**
+ * Approve cUSDCMock to pull `amount` of MockUSDC from the caller.
+ * Required before calling wrapUsdcToCusdc.
+ */
+export async function approveUsdcForWrap(
+  walletClient: WalletClient,
+  amount: bigint,
+): Promise<`0x${string}`> {
+  const [account] = await walletClient.getAddresses();
+  const { request } = await publicClient.simulateContract({
+    address:      MOCK_USDC_ADDRESS,
+    abi:          ERC20_ABI,
+    functionName: 'approve',
+    args:         [CUSDC_MOCK_ADDRESS, amount],
+    account,
+  });
+  return walletClient.writeContract(request);
+}
+
+/**
+ * Wrap `amount` of MockUSDC (plain ERC-20) into cUSDC (ERC-7984 encrypted).
+ * Prerequisite: MockUSDC allowance ≥ amount for cUSDCMock.
+ */
+export async function wrapUsdcToCusdc(
+  walletClient: WalletClient,
+  userAddress: `0x${string}`,
+  amount: bigint,
+): Promise<`0x${string}`> {
+  const [account] = await walletClient.getAddresses();
+  const { request } = await publicClient.simulateContract({
+    address:      CUSDC_MOCK_ADDRESS,
+    abi:          CUSDC_MOCK_ABI,
+    functionName: 'wrap',
+    args:         [userAddress, amount],
+    account,
+  });
+  return walletClient.writeContract(request);
+}
+
+/**
  * Set GhostVault as an operator on cUSDCMock so it can transfer confidential balances.
  */
 export async function setOperatorUsdc(
