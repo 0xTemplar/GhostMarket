@@ -109,7 +109,7 @@ let _fhevmInstance: FhevmInstance | null = null;
  *
  * Docs: https://docs.zama.org/protocol/relayer-sdk-guides/fhevm-relayer/initialization
  */
-export async function initFhevm(_provider?: unknown): Promise<FhevmInstance> {
+export async function initFhevm(): Promise<FhevmInstance> {
   if (_fhevmInstance) return _fhevmInstance;
 
   // Dynamic import keeps the SDK + its WASM out of the SSR bundle entirely.
@@ -171,7 +171,7 @@ export async function encryptBetInput(
   userAddress:     `0x${string}`,
   amount:          bigint,
 ): Promise<EncryptedInput> {
-  const instance = await initFhevm(provider);
+  const instance = await initFhevm();
 
   const buffer = instance.createEncryptedInput(contractAddress, userAddress);
   // add64 matches the euint64 type in the Solidity contract.
@@ -216,6 +216,71 @@ export async function placeEncryptedBet(
   });
 
   return walletClient.writeContract(request);
+}
+
+// ─── Gateway decryption ───────────────────────────────────────────────────────
+
+/**
+ * Decrypt one or more encrypted handles that the calling user has ACL access to.
+ *
+ * The flow:
+ *  1. Generate a one-shot keypair.
+ *  2. Ask the user to sign an EIP-712 reencryption authorisation (single pop-up,
+ *     regardless of how many handles are batched).
+ *  3. The KMS gateway re-encrypts each handle under the ephemeral public key.
+ *  4. Decrypt locally and return a map of handle → plaintext bigint.
+ *
+ * All handles must have been granted to `userAddress` via `FHE.allow()` in the
+ * relevant contract, otherwise the gateway rejects the request.
+ *
+ * @param walletClient  viem WalletClient (must be the owner of the handles).
+ * @param handles       Array of { handle, contractAddress } pairs.
+ * @param userAddress   EVM address that owns the handles.
+ */
+export async function userDecryptHandles(
+  walletClient: WalletClient,
+  handles: Array<{ handle: `0x${string}`; contractAddress: `0x${string}` }>,
+  userAddress: `0x${string}`,
+): Promise<Record<`0x${string}`, bigint>> {
+  const instance = await initFhevm();
+
+  const { publicKey, privateKey } = instance.generateKeypair() as {
+    publicKey: string;
+    privateKey: string;
+  };
+
+  const startTimestamp = Math.floor(Date.now() / 1000);
+  const durationDays   = 1;
+
+  const contractAddresses = [...new Set(handles.map((h) => h.contractAddress))];
+
+  const eip712 = instance.createEIP712(
+    publicKey,
+    contractAddresses,
+    startTimestamp,
+    durationDays,
+  ) as { domain: unknown; types: unknown; primaryType: string; message: unknown };
+
+  const signature = await walletClient.signTypedData({
+    account:     userAddress,
+    domain:      eip712.domain as Parameters<WalletClient['signTypedData']>[0]['domain'],
+    types:       eip712.types  as Parameters<WalletClient['signTypedData']>[0]['types'],
+    primaryType: eip712.primaryType,
+    message:     eip712.message as Parameters<WalletClient['signTypedData']>[0]['message'],
+  });
+
+  const results = await instance.userDecrypt(
+    handles,
+    privateKey,
+    publicKey,
+    signature,
+    contractAddresses,
+    userAddress,
+    startTimestamp,
+    durationDays,
+  ) as Record<`0x${string}`, bigint>;
+
+  return results;
 }
 
 // ─── Read helpers ─────────────────────────────────────────────────────────────

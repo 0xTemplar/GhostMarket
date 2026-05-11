@@ -7,7 +7,6 @@ import {
   ArrowRight, Ghost, Loader2, Clock, ArrowUpRight,
   RefreshCw, Shield, Lock, Eye, EyeOff, Zap, CheckCircle2, AlertCircle,
 } from 'lucide-react';
-import { PortfolioPositionRow } from '@/components/portfolio-position-row';
 import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
 import {
   readAllMarkets, isMarketDeployed,
@@ -15,17 +14,15 @@ import {
 } from '@/lib/market';
 import {
   readEammMarketMeta, readEammPositionHandles, isEammDeployed,
-  type EammMarketMeta, type PositionHandles,
+  type EammMarketMeta,
 } from '@/lib/eamm';
 import {
-  readLockedAmount,
+  readLockedAmountHandle,
   claimVaultPayout,
   readSettlementSigner,
-  publicClient,
-  formatUsdc,
 } from '@/lib/vault';
 import { formatTimeRemaining, cn } from '@/lib/utils';
-import { requestSettlement, type SettlementClaim } from '@/lib/oracle-client';
+import { requestSettlement } from '@/lib/oracle-client';
 
 // ─── Shielded eAMM position type ─────────────────────────────────────────────
 
@@ -399,13 +396,13 @@ export default function PortfolioPage() {
           // EAMM position handles (FHE-encrypted). We show markets where
           // the user has locked collateral.
           const marketIdBytes32 = ('0x' + BigInt(market.id).toString(16).padStart(64, '0')) as `0x${string}`;
-          const locked = await readLockedAmount(
+          const locked = await readLockedAmountHandle(
             user.evmAddress as `0x${string}`,
             marketIdBytes32,
-          ).catch(() => 0n);
-          if (locked === 0n) return;
+          ).catch(() => '0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`);
+          if (locked === '0x0000000000000000000000000000000000000000000000000000000000000000' || locked === '0x') return;
 
-          const yesUsdc = Number(locked) / 1e6;
+          const yesUsdc = 0; // We don't know the amount
           const noUsdc  = 0;
           const dominantSide: OnChainPosition['dominantSide'] = 'YES';
 
@@ -451,19 +448,19 @@ export default function PortfolioPage() {
             const marketIdBytes32 = (
               '0x' + BigInt(market.id).toString(16).padStart(64, '0')
             ) as `0x${string}`;
-            const [meta, lockedCollateral] = await Promise.all([
+            const [meta, lockedCollateralHandle] = await Promise.all([
               readEammMarketMeta(market.id),
-              readLockedAmount(user.evmAddress as `0x${string}`, marketIdBytes32),
+              readLockedAmountHandle(user.evmAddress as `0x${string}`, marketIdBytes32),
             ]);
             // Closed shielded position: market resolved and collateral lock released.
-            if (meta.status === 1 && Number(lockedCollateral) === 0) return;
+            if (meta.status === 1 && (lockedCollateralHandle === '0x0000000000000000000000000000000000000000000000000000000000000000' || lockedCollateralHandle === '0x')) return;
             results.push({
               marketId:         market.id,
               marketTitle:      market.title,
               yesHandle:        handles.yesHandle,
               noHandle:         handles.noHandle,
               meta,
-              lockedCollateral: formatUsdc(lockedCollateral),
+              lockedCollateral: "Encrypted",
               revealed:         false,
               revealedYes:      null,
               revealedNo:       null,
@@ -546,13 +543,13 @@ export default function PortfolioPage() {
       const txHash = await claimVaultPayout(
         walletClient,
         marketIdBytes32,
-        BigInt(claim.payout),
+        claim.payout as `0x${string}`,
         BigInt(claim.nonce),
         BigInt(claim.expiry),
         claim.sig as `0x${string}`,
       );
 
-      const payoutUsdc = (Number(BigInt(claim.payout)) / 1e6).toFixed(4);
+      const payoutUsdc = "Encrypted"; // We don't know the exact amount anymore without decrypting
       setPhase({ phase: 'success', txHash, payout: payoutUsdc });
       // Refresh lists so claimed/closed positions disappear from the open view.
       await Promise.all([fetchShieldedPositions(), fetchOnChainPositions()]);

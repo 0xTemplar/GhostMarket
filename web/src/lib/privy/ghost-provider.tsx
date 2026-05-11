@@ -123,7 +123,37 @@ export function useFlowWalletClient() {
     })();
 
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [embeddedWallet?.address]);
 
   return walletClient;
+}
+
+/**
+ * Returns the raw EIP-1193 provider from the Privy embedded wallet.
+ * Use this wherever Zama's `encryptBetInput` or `initFhevm` requires a provider —
+ * do NOT pass `walletClient.transport`, which is a viem transport descriptor, not
+ * an EIP-1193 object.
+ */
+export function usePrivyProvider() {
+  const { wallets } = useWallets();
+  const [provider, setProvider] = useState<unknown>(null);
+
+  const embeddedWallet = getEmbeddedWallet(wallets);
+
+  useEffect(() => {
+    if (!embeddedWallet) { setProvider(null); return; }
+
+    let cancelled = false;
+    (async () => {
+      await embeddedWallet.switchChain(11155111);
+      const eip1193 = await embeddedWallet.getEthereumProvider();
+      if (!cancelled) setProvider(eip1193);
+    })();
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embeddedWallet?.address]);
+
+  return provider;
 }

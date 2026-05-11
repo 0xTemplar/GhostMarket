@@ -135,14 +135,14 @@ export async function getOrComputeSettlement(
   if (GHOST_VAULT_ADDRESS) {
     try {
       const PAYOUT_ABI = [
-        'function computeExpectedPayout(address user, bytes32 marketId) view returns (uint256)',
+        'function getLockedAmountHandle(address user, bytes32 marketId) view returns (bytes32)',
       ];
       const provider = new ethers.JsonRpcProvider(SEPOLIA_RPC_URL);
       const vault    = new ethers.Contract(GHOST_VAULT_ADDRESS, PAYOUT_ABI, provider);
-      const amount   = await vault.computeExpectedPayout(userAddress, marketIdBytes32) as bigint;
-      payout = amount.toString();
+      const amountHandle   = await vault.getLockedAmountHandle(userAddress, marketIdBytes32) as string;
+      payout = amountHandle;
     } catch (err) {
-      console.warn('[Settlement] computeExpectedPayout read failed:', (err as Error).message);
+      console.warn('[Settlement] getLockedAmountHandle read failed:', (err as Error).message);
     }
   }
 

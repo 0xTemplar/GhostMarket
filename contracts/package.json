@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@filoz/synapse-sdk": "^0.39.0",
+    "@openzeppelin/confidential-contracts": "^0.4.0",
     "@openzeppelin/contracts": "^5.6.1",
     "@zama-fhe/relayer-sdk": "^0.4.1",
     "fhevmjs": "^0.6.2"

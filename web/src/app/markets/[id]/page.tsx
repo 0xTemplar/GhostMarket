@@ -24,7 +24,7 @@ import {
   readEammPositionHandles, readEammMarketMeta, isEammDeployed,
 } from '@/lib/eamm';
 import {
-  readLockedAmount, readComputedPayout, readIsMarketResolved,
+  readLockedAmountHandle, readIsMarketResolved,
   GHOST_VAULT_ADDRESS, publicClient,
 } from '@/lib/vault';
 import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
@@ -107,25 +107,24 @@ function OnChainActions({
       const addr = user.evmAddress as `0x${string}`;
       const zero = '0x' + '0'.repeat(64);
 
-      const [handles, locked, computedPayout, vaultResolved] = await Promise.all([
+      const [handles, lockedHandle, vaultResolved] = await Promise.all([
         isEammDeployed()
           ? readEammPositionHandles(raw.id, addr).catch(() => null)
           : Promise.resolve(null),
-        isEammDeployed() ? readLockedAmount(addr, marketIdBytes32) : Promise.resolve(0n),
-        isEammDeployed() ? readComputedPayout(addr, marketIdBytes32) : Promise.resolve(0n),
+        isEammDeployed() ? readLockedAmountHandle(addr, marketIdBytes32) : Promise.resolve('0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`),
         isEammDeployed() ? readIsMarketResolved(marketIdBytes32) : Promise.resolve(false),
       ]);
 
       if (handles) {
         const hasYes = handles.yesHandle !== zero;
         const hasNo  = handles.noHandle  !== zero;
-        if (hasYes || hasNo || Number(locked) > 0) {
+        if (hasYes || hasNo || (lockedHandle !== '0x0000000000000000000000000000000000000000000000000000000000000000' && lockedHandle !== '0x')) {
           const side = hasYes && hasNo ? 'YES + NO' : hasYes ? 'YES' : hasNo ? 'NO' : '?';
           setShieldedPos({
             hasYes, hasNo,
-            locked:         String(locked),
+            locked:         "Encrypted",
             side,
-            computedPayout: String(computedPayout),
+            computedPayout: "Encrypted",
             vaultResolved,
           });
         }
@@ -145,15 +144,14 @@ function OnChainActions({
     if (!walletClient || !user.evmAddress) return;
     setActionState({ phase: 'loading' });
     try {
-      const { GHOST_VAULT_ABI } = await import('@/lib/vault');
-      const hash = await walletClient.writeContract({
-        address:      GHOST_VAULT_ADDRESS,
-        abi:          GHOST_VAULT_ABI,
-        functionName: 'withdraw',
-        args:         [BigInt(usdcBaseUnits)],
-        account:      user.evmAddress as `0x${string}`,
-        chain:        undefined,
-      });
+      const { withdrawFromVault } = await import('@/lib/vault');
+      const { encryptBetInput } = await import('@/lib/eamm');
+      // We can't use hooks here easily, but we can get the provider from walletClient
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const provider = (walletClient as any).transport;
+      const encrypted = await encryptBetInput(provider, GHOST_VAULT_ADDRESS, user.evmAddress as `0x${string}`, BigInt(usdcBaseUnits));
+
+      const hash = await withdrawFromVault(walletClient, encrypted.handle, encrypted.inputProof);
       await publicClient.waitForTransactionReceipt({ hash });
       setActionState({ phase: 'success', hash, label: 'Withdrawn to wallet' });
       await loadPosition();

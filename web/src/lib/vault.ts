@@ -39,9 +39,8 @@ export const GHOST_VAULT_ADDRESS = (
   process.env.NEXT_PUBLIC_GHOST_VAULT_ADDRESS ?? ''
 ) as `0x${string}`;
 
-export const MOCK_USDC_ADDRESS = (
-  process.env.NEXT_PUBLIC_MOCK_USDC_ADDRESS ?? ''
-) as `0x${string}`;
+import { MOCK_USDC_ADDRESS, CUSDC_MOCK_ADDRESS } from './cusdc';
+export { MOCK_USDC_ADDRESS, CUSDC_MOCK_ADDRESS };
 
 // ─── ABIs ─────────────────────────────────────────────────────────────────────
 
@@ -81,16 +80,9 @@ export const GHOST_VAULT_ABI = [
     name: 'deposit',
     type: 'function',
     stateMutability: 'nonpayable',
-    inputs: [{ name: 'amount', type: 'uint256' }],
-    outputs: [],
-  },
-  {
-    name: 'depositFor',
-    type: 'function',
-    stateMutability: 'nonpayable',
     inputs: [
-      { name: 'user',   type: 'address' },
-      { name: 'amount', type: 'uint256' },
+      { name: 'encAmount', type: 'bytes32' },
+      { name: 'proof',     type: 'bytes'   },
     ],
     outputs: [],
   },
@@ -98,7 +90,10 @@ export const GHOST_VAULT_ABI = [
     name: 'withdraw',
     type: 'function',
     stateMutability: 'nonpayable',
-    inputs: [{ name: 'amount', type: 'uint256' }],
+    inputs: [
+      { name: 'encAmount', type: 'bytes32' },
+      { name: 'proof',     type: 'bytes'   },
+    ],
     outputs: [],
   },
   {
@@ -106,9 +101,10 @@ export const GHOST_VAULT_ABI = [
     type: 'function',
     stateMutability: 'nonpayable',
     inputs: [
-      { name: 'marketId', type: 'bytes32' },
-      { name: 'amount',   type: 'uint256' },
-      { name: 'side',     type: 'bool'    },
+      { name: 'marketId',  type: 'bytes32' },
+      { name: 'side',      type: 'bool'    },
+      { name: 'encAmount', type: 'bytes32' },
+      { name: 'proof',     type: 'bytes'   },
     ],
     outputs: [],
   },
@@ -118,7 +114,7 @@ export const GHOST_VAULT_ABI = [
     stateMutability: 'nonpayable',
     inputs: [
       { name: 'marketId', type: 'bytes32' },
-      { name: 'amount',   type: 'uint256' },
+      { name: 'amount',   type: 'bytes32' },
       { name: 'nonce',    type: 'uint256' },
       { name: 'expiry',   type: 'uint256' },
       { name: 'sig',      type: 'bytes'   },
@@ -127,38 +123,31 @@ export const GHOST_VAULT_ABI = [
   },
   // ── Views ──
   {
-    name: 'getBalance',
+    name: 'getBalanceHandle',
     type: 'function',
     stateMutability: 'view',
     inputs: [{ name: 'user', type: 'address' }],
-    outputs: [{ name: '', type: 'uint256' }],
+    outputs: [{ name: '', type: 'bytes32' }],
   },
   {
-    name: 'getFreeBalance',
+    name: 'getFreeBalanceHandles',
     type: 'function',
     stateMutability: 'view',
     inputs: [{ name: 'user', type: 'address' }],
-    outputs: [{ name: '', type: 'uint256' }],
+    outputs: [
+      { name: 'balance', type: 'bytes32' },
+      { name: 'locked',  type: 'bytes32' },
+    ],
   },
   {
-    name: 'lockedAmounts',
+    name: 'getLockedAmountHandle',
     type: 'function',
     stateMutability: 'view',
     inputs: [
       { name: 'user',     type: 'address' },
       { name: 'marketId', type: 'bytes32' },
     ],
-    outputs: [{ name: '', type: 'uint256' }],
-  },
-  {
-    name: 'computeExpectedPayout',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [
-      { name: 'user',     type: 'address' },
-      { name: 'marketId', type: 'bytes32' },
-    ],
-    outputs: [{ name: '', type: 'uint256' }],
+    outputs: [{ name: '', type: 'bytes32' }],
   },
   {
     name: 'isResolved',
@@ -215,46 +204,34 @@ export async function readUsdcAllowance(
 
 // ─── Vault read helpers ───────────────────────────────────────────────────────
 
-export async function readVaultBalance(userAddress: `0x${string}`): Promise<bigint> {
+export async function readVaultBalanceHandle(userAddress: `0x${string}`): Promise<`0x${string}`> {
   return publicClient.readContract({
     address:      GHOST_VAULT_ADDRESS,
     abi:          GHOST_VAULT_ABI,
-    functionName: 'getBalance',
+    functionName: 'getBalanceHandle',
     args:         [userAddress],
-  }) as Promise<bigint>;
+  }) as Promise<`0x${string}`>;
 }
 
-export async function readFreeBalance(userAddress: `0x${string}`): Promise<bigint> {
+export async function readFreeBalanceHandles(userAddress: `0x${string}`): Promise<[`0x${string}`, `0x${string}`]> {
   return publicClient.readContract({
     address:      GHOST_VAULT_ADDRESS,
     abi:          GHOST_VAULT_ABI,
-    functionName: 'getFreeBalance',
+    functionName: 'getFreeBalanceHandles',
     args:         [userAddress],
-  }) as Promise<bigint>;
+  }) as Promise<[`0x${string}`, `0x${string}`]>;
 }
 
-export async function readLockedAmount(
+export async function readLockedAmountHandle(
   userAddress: `0x${string}`,
   marketId:    `0x${string}`,
-): Promise<bigint> {
+): Promise<`0x${string}`> {
   return publicClient.readContract({
     address:      GHOST_VAULT_ADDRESS,
     abi:          GHOST_VAULT_ABI,
-    functionName: 'lockedAmounts',
+    functionName: 'getLockedAmountHandle',
     args:         [userAddress, marketId],
-  }) as Promise<bigint>;
-}
-
-export async function readComputedPayout(
-  userAddress: `0x${string}`,
-  marketId:    `0x${string}`,
-): Promise<bigint> {
-  return publicClient.readContract({
-    address:      GHOST_VAULT_ADDRESS,
-    abi:          GHOST_VAULT_ABI,
-    functionName: 'computeExpectedPayout',
-    args:         [userAddress, marketId],
-  }) as Promise<bigint>;
+  }) as Promise<`0x${string}`>;
 }
 
 export async function readIsMarketResolved(marketId: `0x${string}`): Promise<boolean> {
@@ -274,89 +251,73 @@ export async function readSettlementSigner(): Promise<`0x${string}`> {
   }) as Promise<`0x${string}`>;
 }
 
+import { CUSDC_MOCK_ABI } from './cusdc';
+
 // ─── USDC write helper ────────────────────────────────────────────────────────
 
 /**
- * Approve GhostVault to spend `amount` USDC on behalf of the user.
- * Must be called before depositToVault if allowance < amount.
+ * Set GhostVault as an operator on cUSDCMock so it can transfer confidential balances.
  */
-export async function approveUsdc(
+export async function setOperatorUsdc(
   walletClient: WalletClient,
-  amount:       bigint,
 ): Promise<`0x${string}`> {
   const [account] = await walletClient.getAddresses();
   const { request } = await publicClient.simulateContract({
-    address:      MOCK_USDC_ADDRESS,
-    abi:          ERC20_ABI,
-    functionName: 'approve',
-    args:         [GHOST_VAULT_ADDRESS, amount],
+    address:      CUSDC_MOCK_ADDRESS,
+    abi:          CUSDC_MOCK_ABI,
+    functionName: 'setOperator',
+    args:         [GHOST_VAULT_ADDRESS, 4294967295], // max uint48
     account,
   });
   return walletClient.writeContract(request);
 }
 
+export async function readIsOperator(
+  owner:   `0x${string}`,
+  spender: `0x${string}`,
+): Promise<boolean> {
+  return publicClient.readContract({
+    address:      CUSDC_MOCK_ADDRESS,
+    abi:          CUSDC_MOCK_ABI,
+    functionName: 'isOperator',
+    args:         [owner, spender],
+  }) as Promise<boolean>;
+}
+
 // ─── Vault write helpers ──────────────────────────────────────────────────────
 
 /**
- * Deposit USDC into GhostVault.
+ * Deposit cUSDC into GhostVault.
  *
- * Prerequisite: user has approved GhostVault for at least `amount`.
- * Use approveUsdc() first if needed (check readUsdcAllowance).
- *
- * @param amount USDC in base units (use parseUsdc("10") for 10 USDC).
+ * Prerequisite: user has set GhostVault as operator on cUSDC.
  */
 export async function depositToVault(
   walletClient: WalletClient,
-  amount:       bigint,
+  encAmount:    `0x${string}`,
+  proof:        `0x${string}`,
 ): Promise<`0x${string}`> {
   const [account] = await walletClient.getAddresses();
   const { request } = await publicClient.simulateContract({
     address:      GHOST_VAULT_ADDRESS,
     abi:          GHOST_VAULT_ABI,
     functionName: 'deposit',
-    args:         [amount],
+    args:         [encAmount, proof],
     account,
   });
   return walletClient.writeContract(request);
 }
 
-/**
- * Approve + deposit in one helper — handles the allowance check automatically.
- * Broadcasts two transactions if approval is needed; one if allowance is sufficient.
- *
- * @returns Array of tx hashes: [approveTx?, depositTx]
- */
-export async function approveAndDeposit(
-  walletClient: WalletClient,
-  amount:       bigint,
-): Promise<`0x${string}`[]> {
-  const [account] = await walletClient.getAddresses();
-  const allowance = await readUsdcAllowance(account, GHOST_VAULT_ADDRESS);
-
-  const hashes: `0x${string}`[] = [];
-
-  if (allowance < amount) {
-    const approveTx = await approveUsdc(walletClient, amount);
-    hashes.push(approveTx);
-    // Wait for approval to be mined before depositing.
-    await publicClient.waitForTransactionReceipt({ hash: approveTx });
-  }
-
-  const depositTx = await depositToVault(walletClient, amount);
-  hashes.push(depositTx);
-  return hashes;
-}
-
 export async function withdrawFromVault(
   walletClient: WalletClient,
-  amount:       bigint,
+  encAmount:    `0x${string}`,
+  proof:        `0x${string}`,
 ): Promise<`0x${string}`> {
   const [account] = await walletClient.getAddresses();
   const { request } = await publicClient.simulateContract({
     address:      GHOST_VAULT_ADDRESS,
     abi:          GHOST_VAULT_ABI,
     functionName: 'withdraw',
-    args:         [amount],
+    args:         [encAmount, proof],
     account,
   });
   return walletClient.writeContract(request);
@@ -365,15 +326,16 @@ export async function withdrawFromVault(
 export async function lockBetCollateral(
   walletClient: WalletClient,
   marketId:     `0x${string}`,
-  amount:       bigint,
   side:         boolean,
+  encAmount:    `0x${string}`,
+  proof:        `0x${string}`,
 ): Promise<`0x${string}`> {
   const [account] = await walletClient.getAddresses();
   const { request } = await publicClient.simulateContract({
     address:      GHOST_VAULT_ADDRESS,
     abi:          GHOST_VAULT_ABI,
     functionName: 'lockForBet',
-    args:         [marketId, amount, side],
+    args:         [marketId, side, encAmount, proof],
     account,
   });
   return walletClient.writeContract(request);
@@ -382,7 +344,7 @@ export async function lockBetCollateral(
 export async function claimVaultPayout(
   walletClient:    WalletClient,
   marketIdBytes32: `0x${string}`,
-  amount:          bigint,
+  amountHandle:    `0x${string}`,
   nonce:           bigint,
   expiry:          bigint,
   sig:             `0x${string}`,
@@ -392,10 +354,38 @@ export async function claimVaultPayout(
     address:      GHOST_VAULT_ADDRESS,
     abi:          GHOST_VAULT_ABI,
     functionName: 'claimPayout',
-    args:         [marketIdBytes32, amount, nonce, expiry, sig],
+    args:         [marketIdBytes32, amountHandle, nonce, expiry, sig],
     account,
   });
   return walletClient.writeContract(request);
+}
+
+/**
+ * Set operator + deposit in one helper.
+ * Broadcasts two transactions if operator is not set; one if it is.
+ *
+ * @returns Array of tx hashes: [operatorTx?, depositTx]
+ */
+export async function approveAndDeposit(
+  walletClient: WalletClient,
+  encAmount:    `0x${string}`,
+  proof:        `0x${string}`,
+): Promise<`0x${string}`[]> {
+  const [account] = await walletClient.getAddresses();
+  const isOperator = await readIsOperator(account, GHOST_VAULT_ADDRESS);
+
+  const hashes: `0x${string}`[] = [];
+
+  if (!isOperator) {
+    const operatorTx = await setOperatorUsdc(walletClient);
+    hashes.push(operatorTx);
+    // Wait for operator to be set before depositing.
+    await publicClient.waitForTransactionReceipt({ hash: operatorTx });
+  }
+
+  const depositTx = await depositToVault(walletClient, encAmount, proof);
+  hashes.push(depositTx);
+  return hashes;
 }
 
 // ─── Convenience ──────────────────────────────────────────────────────────────

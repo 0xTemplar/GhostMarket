@@ -20,10 +20,10 @@ import {
 } from '@/lib/eamm';
 import {
   lockBetCollateral,
-  readLockedAmount,
-  readFreeBalance,
+  readLockedAmountHandle,
   approveAndDeposit,
   parseUsdc,
+  GHOST_VAULT_ADDRESS,
 } from '@/lib/vault';
 
 interface BetSlipProps {
@@ -89,6 +89,7 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
   // Reset tx state when side or amount changes
   useEffect(() => {
     if (txState.phase === 'error') setTxState({ phase: 'idle' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [side, amount]);
 
   // ─── Shielded path (eAMM on Zama / Ethereum Sepolia) ───────────────────────
@@ -112,91 +113,68 @@ export function BetSlip({ market, side, onSideChange, onClose }: BetSlipProps) {
       const { publicClient } = await import('@/lib/vault');
       const marketIdBytes32 = ('0x' + BigInt(Number(market.id)).toString(16).padStart(64, '0')) as `0x${string}`;
 
-      const alreadyLocked = userAddress
-        ? await readLockedAmount(userAddress, marketIdBytes32)
-        : 0n;
-
-      if (alreadyLocked === 0n) {
-        // ── Step A: deposit if vault free balance is insufficient ──────────────
-        const freeBalance = userAddress ? await readFreeBalance(userAddress) : 0n;
-
-        if (freeBalance < amountWei) {
-          const shortfall = amountWei - freeBalance;
-          setTxState({ phase: 'depositing' });
-          // approveAndDeposit handles allowance check + approve tx + deposit tx
-          const hashes = await approveAndDeposit(walletClient, shortfall);
-          // last hash is the deposit; wait for it
-          await publicClient.waitForTransactionReceipt({ hash: hashes[hashes.length - 1] });
-        }
-
-        // ── Step B: lock the (now-funded) collateral ───────────────────────────
-        setTxState({ phase: 'locking' });
-        const lockHash = await lockBetCollateral(walletClient, marketIdBytes32, amountWei, side === 'YES');
-        await publicClient.waitForTransactionReceipt({ hash: lockHash });
-      } else {
-        setTxState({ phase: 'locking' });
-        // Already locked: skip deposit/lock, proceed to Sepolia EAMM bet.
-      }
-    } catch (err: unknown) {
-      let message = 'Collateral lock failed.';
-      if (err instanceof Error) {
-        const raw = err.message;
-        const lower = raw.toLowerCase();
-        if (raw.includes('User rejected')) {
-          message = 'Lock cancelled.';
-        } else if (
-          raw.includes('InsufficientBalance') ||
-          raw.includes('0xcf479181')
-        ) {
-          message = 'Insufficient USDC in vault. Deposit USDC from the Vault page first.';
-        } else if (
-          raw.includes('BetAlreadyLocked') ||
-          raw.includes('0xac396183')
-        ) {
-          message = 'Collateral is already locked for this market. You can submit the shielded bet now.';
-        } else if (lower.includes('zeroamount') || raw.includes('0x1f2a2005')) {
-          message = 'Bet amount must be greater than zero.';
-        } else {
-          message = raw.slice(0, 160);
-        }
-      }
-      setTxState({ phase: 'error', message });
-      return;
-    }
-
-    // ── Layer 2: encrypt + submit to GhostEAMM on Sepolia ────────────────────
-    setTxState({ phase: 'encrypting' });
-    try {
-      // Get the Privy embedded wallet and switch it to Sepolia (11155111).
-      // We must NOT use window.ethereum — that's the injected MetaMask/browser
-      // wallet, which is a different key from the Privy embedded wallet the user
-      // is actually logged in with.
+      // Get Privy provider for encryption
       const embeddedWallet = wallets.find((w) => w.walletClientType === 'privy');
       if (!embeddedWallet) throw new Error('Privy embedded wallet not found. Try logging out and back in.');
-
       await embeddedWallet.switchChain(11155111);
       const provider = await embeddedWallet.getEthereumProvider();
 
-      const userAddress = (user.evmAddress ?? embeddedWallet.address) as `0x${string}`;
+      const alreadyLocked = userAddress
+        ? await readLockedAmountHandle(userAddress, marketIdBytes32)
+        : '0x0000000000000000000000000000000000000000000000000000000000000000'; // uninitialized handle
 
-      // Encrypt the bet amount client-side — plaintext never leaves the browser.
-      const encrypted = await encryptBetInput(provider, GHOST_EAMM_ADDRESS, userAddress, amountWei);
+      // If handle is uninitialized (all zeros), it means not locked.
+      if (alreadyLocked === '0x0000000000000000000000000000000000000000000000000000000000000000' || alreadyLocked === '0x') {
+        setTxState({ phase: 'encrypting' });
+        // Encrypt for Vault
+        const vaultEncrypted = await encryptBetInput(provider, GHOST_VAULT_ADDRESS, userAddress, amountWei);
+        // Encrypt for EAMM
+        const eammEncrypted = await encryptBetInput(provider, GHOST_EAMM_ADDRESS, userAddress, amountWei);
 
-      // Sign + submit to GhostEAMM on Ethereum Sepolia.
-      setTxState({ phase: 'signing' });
-      const zamaWallet = buildZamaWalletClient(provider);
-      const hash = await placeEncryptedBet(zamaWallet, Number(market.id), side === 'YES', encrypted);
+        // ── Step A: deposit if vault free balance is insufficient ──────────────
+        // We skip free balance check in UI for now and just deposit the whole amount.
+        setTxState({ phase: 'depositing' });
+        const hashes = await approveAndDeposit(walletClient, vaultEncrypted.handle, vaultEncrypted.inputProof);
+        await publicClient.waitForTransactionReceipt({ hash: hashes[hashes.length - 1] });
 
-      setTxState({ phase: 'pending', hash });
+        // ── Step B: lock the (now-funded) collateral ───────────────────────────
+        setTxState({ phase: 'locking' });
+        const lockHash = await lockBetCollateral(walletClient, marketIdBytes32, side === 'YES', vaultEncrypted.handle, vaultEncrypted.inputProof);
+        await publicClient.waitForTransactionReceipt({ hash: lockHash });
 
-      const { zamaPublicClient } = await import('@/lib/eamm');
-      await zamaPublicClient.waitForTransactionReceipt({ hash });
+        // ── Layer 2: submit to GhostEAMM on Sepolia ────────────────────
+        setTxState({ phase: 'signing' });
+        const zamaWallet = buildZamaWalletClient(provider);
+        const hash = await placeEncryptedBet(zamaWallet, Number(market.id), side === 'YES', eammEncrypted);
 
-      // Non-blocking metadata write: gives oracle deterministic lookup for
-      // both safe and strict settlement flows.
-      void registerCanonicalBetTxHash(Number(market.id), userAddress, hash);
+        setTxState({ phase: 'pending', hash });
 
-      setTxState({ phase: 'success', hash, shielded: true });
+        const { zamaPublicClient } = await import('@/lib/eamm');
+        await zamaPublicClient.waitForTransactionReceipt({ hash });
+
+        void registerCanonicalBetTxHash(Number(market.id), userAddress, hash);
+
+        setTxState({ phase: 'success', hash, shielded: true });
+        return;
+      } else {
+        // Already locked: skip deposit/lock, proceed to Sepolia EAMM bet.
+        setTxState({ phase: 'encrypting' });
+        const eammEncrypted = await encryptBetInput(provider, GHOST_EAMM_ADDRESS, userAddress, amountWei);
+
+        setTxState({ phase: 'signing' });
+        const zamaWallet = buildZamaWalletClient(provider);
+        const hash = await placeEncryptedBet(zamaWallet, Number(market.id), side === 'YES', eammEncrypted);
+
+        setTxState({ phase: 'pending', hash });
+
+        const { zamaPublicClient } = await import('@/lib/eamm');
+        await zamaPublicClient.waitForTransactionReceipt({ hash });
+
+        void registerCanonicalBetTxHash(Number(market.id), userAddress, hash);
+
+        setTxState({ phase: 'success', hash, shielded: true });
+        return;
+      }
     } catch (err: unknown) {
       // Reset the fhevm singleton so the next retry re-initialises the SDK
       // rather than reusing a potentially broken or stale instance.

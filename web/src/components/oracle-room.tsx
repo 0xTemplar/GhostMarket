@@ -578,7 +578,6 @@ export function OracleRoom() {
                     txHash: logPayload.txHash
                       ? String(logPayload.txHash)
                       : null,
-                    cid: null,
                   } satisfies OracleLogEntry,
                 ],
               };

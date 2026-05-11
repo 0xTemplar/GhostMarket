@@ -27,11 +27,11 @@ const CHAIN_ID       = 11155111; // Ethereum Sepolia
 
 const CLAIM_TYPE = {
   Claim: [
-    { name: 'user',     type: 'address' },
-    { name: 'marketId', type: 'bytes32' },
-    { name: 'amount',   type: 'uint256' },
-    { name: 'nonce',    type: 'uint256' },
-    { name: 'expiry',   type: 'uint256' },
+    { name: 'user',         type: 'address' },
+    { name: 'marketId',     type: 'bytes32' },
+    { name: 'amountHandle', type: 'bytes32' },
+    { name: 'nonce',        type: 'uint256' },
+    { name: 'expiry',       type: 'uint256' },
   ],
 };
 
@@ -89,11 +89,11 @@ export async function signSettlement(
   };
 
   const value = {
-    user:     params.userAddress,
-    marketId: params.marketIdBytes32,
-    amount:   BigInt(params.payout),
-    nonce:    BigInt(params.nonce),
-    expiry:   BigInt(params.expiry),
+    user:         params.userAddress,
+    marketId:     params.marketIdBytes32,
+    amountHandle: params.payout,
+    nonce:        BigInt(params.nonce),
+    expiry:       BigInt(params.expiry),
   };
 
   const sig = await wallet.signTypedData(domain, CLAIM_TYPE, value);

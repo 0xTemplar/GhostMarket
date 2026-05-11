@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -13,13 +13,12 @@ import {
   X,
   Info,
 } from 'lucide-react';
-import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
+import { useFlowAuth, useFlowWalletClient, usePrivyProvider } from '@/lib/privy/ghost-provider';
 import {
-  readVaultBalance,
-  readFreeBalance,
   readUsdcBalance,
-  readUsdcAllowance,
-  approveUsdc,
+  readFreeBalanceHandles,
+  readIsOperator,
+  setOperatorUsdc,
   depositToVault,
   withdrawFromVault,
   parseUsdc,
@@ -28,8 +27,6 @@ import {
   MOCK_USDC_ADDRESS,
   publicClient,
 } from '@/lib/vault';
-
-const BALANCE_STORAGE_KEY = 'ghost:vault:lastFreeBalance';
 
 type TxStatus = 'idle' | 'approving' | 'depositing' | 'pending' | 'success' | 'error';
 
@@ -44,7 +41,8 @@ const USDC_NOT_SET  = !MOCK_USDC_ADDRESS  || MOCK_USDC_ADDRESS  === '0x';
 
 export default function VaultPage() {
   const { user, login, isLoading } = useFlowAuth();
-  const walletClient = useFlowWalletClient();
+  const walletClient  = useFlowWalletClient();
+  const privyProvider = usePrivyProvider();
 
   // Balances in USDC base units (bigint, 6 decimals)
   const [vaultBalance, setVaultBalance]   = useState<bigint | null>(null);
@@ -60,29 +58,29 @@ export default function VaultPage() {
   const prevFreeRef        = useRef<bigint | null>(null);
   const suppressBannerRef  = useRef(false);
 
-  const fetchBalances = useCallback(async (suppressBanner = false) => {
+  const fetchBalances = useCallback(async () => {
     if (!user.evmAddress) return;
     const addr = user.evmAddress as `0x${string}`;
-    const [total, free, wallet] = await Promise.all([
-      readVaultBalance(addr),
-      readFreeBalance(addr),
-      readUsdcBalance(addr),
-    ]);
-    setVaultBalance(total);
-    setFreeBalance(free);
+
+    // Wallet USDC is plaintext — fetch normally.
+    const wallet = await readUsdcBalance(addr);
     setWalletUsdc(wallet);
 
-    const prev = prevFreeRef.current;
-    if (prev !== null && !suppressBanner && !suppressBannerRef.current) {
-      const delta = free - prev;
-      if (delta > 0n) setSettlementBanner({ delta });
-    }
+    // Vault balances are encrypted on-chain (euint64). We cannot read them as
+    // plaintext without a gateway decryption request. Represent them as null so
+    // the UI renders an "Encrypted" placeholder rather than a misleading "$0.00".
+    setVaultBalance(null);
+    setFreeBalance(null);
+
+    // Settlement banner: only fire when we have a real previous free balance to
+    // compare against. With encrypted balances that is not yet wired up, so we
+    // skip the delta check rather than computing 0n - prev (always ≤ 0).
     suppressBannerRef.current = false;
-    prevFreeRef.current       = free;
+    prevFreeRef.current       = null;
   }, [user.evmAddress]);
 
   useEffect(() => {
-    fetchBalances(true);
+    fetchBalances();
     const id = setInterval(() => fetchBalances(), 30_000);
     return () => clearInterval(id);
   }, [fetchBalances]);
@@ -95,21 +93,26 @@ export default function VaultPage() {
 
     const hashes: string[] = [];
     try {
-      // Step 1 — check allowance and approve if needed
-      const allowance = await readUsdcAllowance(
+      // Step 1 — check operator status and set if needed
+      const isOperator = await readIsOperator(
         user.evmAddress as `0x${string}`,
         GHOST_VAULT_ADDRESS,
       );
-      if (allowance < amount) {
+      if (!isOperator) {
         setDepositTx({ status: 'approving' });
-        const approveTx = await approveUsdc(walletClient, amount);
+        const approveTx = await setOperatorUsdc(walletClient);
         hashes.push(approveTx);
         await publicClient.waitForTransactionReceipt({ hash: approveTx });
       }
 
-      // Step 2 — deposit
+      // Step 2 — encrypt amount
       setDepositTx({ status: 'depositing' });
-      const depositTxHash = await depositToVault(walletClient, amount);
+      if (!privyProvider) throw new Error('Wallet provider not ready');
+      const { encryptBetInput } = await import('@/lib/eamm');
+      const encrypted = await encryptBetInput(privyProvider, GHOST_VAULT_ADDRESS, user.evmAddress as `0x${string}`, amount);
+
+      // Step 3 — deposit
+      const depositTxHash = await depositToVault(walletClient, encrypted.handle, encrypted.inputProof);
       hashes.push(depositTxHash);
       await publicClient.waitForTransactionReceipt({ hash: depositTxHash });
 
@@ -130,7 +133,11 @@ export default function VaultPage() {
 
     setWithdrawTx({ status: 'pending' });
     try {
-      const hash = await withdrawFromVault(walletClient, amount);
+      if (!privyProvider) throw new Error('Wallet provider not ready');
+      const { encryptBetInput } = await import('@/lib/eamm');
+      const encrypted = await encryptBetInput(privyProvider, GHOST_VAULT_ADDRESS, user.evmAddress as `0x${string}`, amount);
+
+      const hash = await withdrawFromVault(walletClient, encrypted.handle, encrypted.inputProof);
       await publicClient.waitForTransactionReceipt({ hash });
       setWithdrawTx({ status: 'success', hashes: [hash] });
       setWithdrawAmount('');
