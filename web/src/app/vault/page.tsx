@@ -39,15 +39,25 @@ interface TxState {
 const NOT_DEPLOYED = !GHOST_VAULT_ADDRESS || GHOST_VAULT_ADDRESS === '0x';
 const USDC_NOT_SET  = !MOCK_USDC_ADDRESS  || MOCK_USDC_ADDRESS  === '0x';
 
+const ZERO_HANDLE = `0x${'0'.repeat(64)}` as `0x${string}`;
+
 export default function VaultPage() {
   const { user, login, isLoading } = useFlowAuth();
   const walletClient  = useFlowWalletClient();
   const privyProvider = usePrivyProvider();
 
-  // Balances in USDC base units (bigint, 6 decimals)
+  // Plaintext balances — null means "not yet decrypted"
   const [vaultBalance, setVaultBalance]   = useState<bigint | null>(null);
   const [freeBalance,  setFreeBalance]    = useState<bigint | null>(null);
   const [walletUsdc,   setWalletUsdc]     = useState<bigint | null>(null);
+
+  // Encrypted handles returned by the vault contract
+  const [balanceHandle,     setBalanceHandle]     = useState<`0x${string}` | null>(null);
+  const [totalLockedHandle, setTotalLockedHandle] = useState<`0x${string}` | null>(null);
+
+  // Gateway decryption state
+  const [isDecrypting, setIsDecrypting] = useState(false);
+  const [decryptError, setDecryptError] = useState(false);
 
   const [depositAmount,  setDepositAmount]  = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
@@ -55,28 +65,37 @@ export default function VaultPage() {
   const [withdrawTx,     setWithdrawTx]     = useState<TxState>({ status: 'idle' });
   const [settlementBanner, setSettlementBanner] = useState<{ delta: bigint } | null>(null);
 
-  const prevFreeRef        = useRef<bigint | null>(null);
-  const suppressBannerRef  = useRef(false);
+  const prevFreeRef       = useRef<bigint | null>(null);
+  const suppressBannerRef = useRef(false);
 
+  // ── Step 1: fetch wallet USDC balance + vault ciphertext handles ─────────────
   const fetchBalances = useCallback(async () => {
     if (!user.evmAddress) return;
     const addr = user.evmAddress as `0x${string}`;
 
-    // Wallet USDC is plaintext — fetch normally.
-    const wallet = await readUsdcBalance(addr);
+    const [wallet, [bal, locked]] = await Promise.all([
+      readUsdcBalance(addr),
+      readFreeBalanceHandles(addr),
+    ]);
     setWalletUsdc(wallet);
 
-    // Vault balances are encrypted on-chain (euint64). We cannot read them as
-    // plaintext without a gateway decryption request. Represent them as null so
-    // the UI renders an "Encrypted" placeholder rather than a misleading "$0.00".
-    setVaultBalance(null);
-    setFreeBalance(null);
+    if (bal === ZERO_HANDLE) {
+      // No deposits yet — balance is definitively 0, nothing to decrypt.
+      setVaultBalance(0n);
+      setFreeBalance(0n);
+      setBalanceHandle(null);
+      setTotalLockedHandle(null);
+    } else {
+      // Store the handles; the decryption effect will fire automatically.
+      setBalanceHandle(bal);
+      setTotalLockedHandle(locked !== ZERO_HANDLE ? locked : null);
+      // Reset previously decrypted values so the UI shows "decrypting" state.
+      setVaultBalance(null);
+      setFreeBalance(null);
+      setDecryptError(false);
+    }
 
-    // Settlement banner: only fire when we have a real previous free balance to
-    // compare against. With encrypted balances that is not yet wired up, so we
-    // skip the delta check rather than computing 0n - prev (always ≤ 0).
     suppressBannerRef.current = false;
-    prevFreeRef.current       = null;
   }, [user.evmAddress]);
 
   useEffect(() => {
@@ -84,6 +103,64 @@ export default function VaultPage() {
     const id = setInterval(() => fetchBalances(), 30_000);
     return () => clearInterval(id);
   }, [fetchBalances]);
+
+  // ── Step 2: gateway-decrypt handles whenever they change ─────────────────────
+  const runDecrypt = useCallback(async () => {
+    if (!balanceHandle || !walletClient || !user.evmAddress) return;
+
+    setIsDecrypting(true);
+    setDecryptError(false);
+
+    try {
+      const { userDecryptHandles } = await import('@/lib/eamm');
+
+      const pairs: Array<{ handle: `0x${string}`; contractAddress: `0x${string}` }> = [
+        { handle: balanceHandle, contractAddress: GHOST_VAULT_ADDRESS },
+      ];
+      if (totalLockedHandle) {
+        pairs.push({ handle: totalLockedHandle, contractAddress: GHOST_VAULT_ADDRESS });
+      }
+
+      const results = await userDecryptHandles(
+        walletClient,
+        pairs,
+        user.evmAddress as `0x${string}`,
+      );
+
+      const total  = (results[balanceHandle]     ?? 0n) as bigint;
+      const locked = totalLockedHandle
+        ? (results[totalLockedHandle] ?? 0n) as bigint
+        : 0n;
+
+      const prev = prevFreeRef.current;
+      const free = total - locked;
+
+      // Settlement banner: fire if free balance increased since last read.
+      if (prev !== null && !suppressBannerRef.current && free > prev) {
+        setSettlementBanner({ delta: free - prev });
+      }
+      suppressBannerRef.current = false;
+      prevFreeRef.current       = free;
+
+      setVaultBalance(total);
+      setFreeBalance(free);
+    } catch {
+      // User dismissed the signature request or gateway error.
+      setDecryptError(true);
+    } finally {
+      setIsDecrypting(false);
+    }
+  }, [balanceHandle, totalLockedHandle, walletClient, user.evmAddress]);
+
+  useEffect(() => {
+    if (balanceHandle && walletClient) runDecrypt();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [balanceHandle, totalLockedHandle, walletClient]);
+
+  const lockedAmount = useMemo(
+    () => vaultBalance !== null && freeBalance !== null ? vaultBalance - freeBalance : null,
+    [vaultBalance, freeBalance],
+  );
 
   // ── Deposit ────────────────────────────────────────────────────────────────
   async function handleDeposit() {
@@ -179,9 +256,6 @@ export default function VaultPage() {
     );
   }
 
-  const lockedAmount = vaultBalance !== null && freeBalance !== null
-    ? vaultBalance - freeBalance
-    : null;
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-10 space-y-6">
@@ -236,15 +310,30 @@ export default function VaultPage() {
       {/* Balance card */}
       <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-6">
         <p className="text-xs text-slate-500 uppercase tracking-widest mb-1">Available balance</p>
-        <div className="flex items-end gap-3">
-          <span className="text-4xl font-bold text-white tabular-nums">
-            {freeBalance === null ? (
-              <Loader2 className="w-8 h-8 animate-spin text-slate-600 inline" />
-            ) : (
-              Number(formatUsdc(freeBalance)).toFixed(2)
-            )}
-          </span>
-          <span className="text-slate-400 mb-1 text-lg">USDC</span>
+        <div className="flex items-end gap-3 min-h-11">
+          {freeBalance !== null ? (
+            <>
+              <span className="text-4xl font-bold text-white tabular-nums">
+                {Number(formatUsdc(freeBalance)).toFixed(2)}
+              </span>
+              <span className="text-slate-400 mb-1 text-lg">USDC</span>
+            </>
+          ) : isDecrypting ? (
+            <span className="flex items-center gap-2 text-slate-400 text-sm">
+              <Loader2 className="w-4 h-4 animate-spin" strokeWidth={1.5} />
+              Decrypting via Zama gateway…
+            </span>
+          ) : decryptError && balanceHandle ? (
+            <button
+              onClick={runDecrypt}
+              className="flex items-center gap-2 text-sm text-indigo-400 hover:text-indigo-300 transition-colors"
+            >
+              <ShieldCheck className="w-4 h-4" strokeWidth={1.5} />
+              Reveal balance (sign to decrypt)
+            </button>
+          ) : (
+            <span className="text-slate-500 text-sm">—</span>
+          )}
         </div>
 
         {/* Locked collateral */}
