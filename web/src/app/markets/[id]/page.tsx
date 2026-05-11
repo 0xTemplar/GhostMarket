@@ -5,17 +5,16 @@ import Link from 'next/link';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
-  ArrowLeft, Clock, Users, BarChart3, Droplets, Shield, ExternalLink,
-  Flame, TrendingUp, TrendingDown, Loader2, AlertCircle, RefreshCw, Lock, Unlock,
+  ArrowLeft, Shield, ExternalLink,
+  Loader2, AlertCircle, RefreshCw, Lock, Unlock,
 } from 'lucide-react';
 import { mockMarkets } from '@/data/markets';
 import type { Market } from '@/types/market';
-import { StatPill } from '@/components/stat-pill';
-import { AreaChart } from '@/components/area-chart';
 import { useBetSlip } from '@/components/bet-slip-provider';
+import { MarketDetailLeftPanel } from '@/components/market-detail-left-panel';
 import {
-  formatVolume, formatDate, formatTimeRemaining, formatTraders,
-  formatPercent, cn,
+  formatVolume, formatTraders,
+  cn,
 } from '@/lib/utils';
 import {
   readMarket, type FrontendMarket,
@@ -38,38 +37,7 @@ function isNumericId(id: string): boolean {
   return /^\d+$/.test(id);
 }
 
-type ActivityItem = {
-  user: string;
-  side: 'YES' | 'NO';
-  priceCents: number;
-  amount: string;
-  minsAgo: number;
-};
-
 const ETHERSCAN = 'https://sepolia.etherscan.io';
-
-function buildRecentActivity(market: Market): ActivityItem[] {
-  const yesPct = Math.round(market.yesPrice * 100);
-  const baseTrade = Math.max(40, Math.round(market.liquidity / 12000));
-  const users = ['0x7a3f…', '0x9c1a…', 'alexa', 'mori', '0x5b2d…', 'taro'];
-  const minuteOffsets = [2, 5, 9, 13, 18, 26];
-
-  return minuteOffsets.map((minsAgo, i) => {
-    const swing = (i % 3) - 1; // -1, 0, +1
-    const side: 'YES' | 'NO' = i % 2 === 0 ? 'YES' : 'NO';
-    const priceCents = side === 'YES'
-      ? Math.min(99, Math.max(1, yesPct + swing))
-      : Math.min(99, Math.max(1, 100 - yesPct + swing));
-
-    return {
-      user: users[i % users.length],
-      side,
-      priceCents,
-      amount: `$${(baseTrade + i * 12).toLocaleString()}`,
-      minsAgo,
-    };
-  });
-}
 
 // ─── On-chain market actions panel ───────────────────────────────────────────
 
@@ -270,7 +238,7 @@ function OnChainActions({
     lockedBn === null || lockedBn > 0n;
 
   return (
-    <div className="rounded-2xl border border-white/5 bg-slate-900 p-5 space-y-4">
+    <div className="rounded-2xl border border-white/5  p-5 space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-white">Your Position</h3>
         <button
@@ -616,17 +584,11 @@ export default function MarketDetailPage() {
   const noPct   = 100 - yesPct;
   const marketFullyPriced = market.yesPrice >= 0.999 || market.noPrice >= 0.999;
   const sepoliaClosed = eammMeta ? eammMeta.status !== 0 : false;
-  const isPositiveChange = market.change24h >= 0;
-  const statusMap: Record<string, string> = {
-    active: 'Active', resolved: 'Resolved', disputed: 'Disputed', pending: 'Pending',
-  };
   // Bets blocked when a sealed window has expired but not yet been settled.
   const canBet = market.status === 'active' && !marketFullyPriced && !sepoliaClosed && !windowSettling;
-  const recentActivity = buildRecentActivity(market);
   const relatedMarkets = mockMarkets
     .filter((m) => m.category === market.category && m.id !== market.id)
     .slice(0, 3);
-  const buyPressure = Math.round((market.yesPrice / (market.yesPrice + market.noPrice)) * 100);
 
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
@@ -643,227 +605,14 @@ export default function MarketDetailPage() {
           Back to Markets
         </Link>
 
-        <div className="flex items-start gap-4 mb-4">
-          {market.image && (
-            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden shrink-0 border border-white/10 bg-slate-800">
-              <img src={market.image} alt="" className="w-full h-full object-cover" />
-            </div>
-          )}
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap mb-2">
-              <span className="px-2.5 py-1 rounded-lg text-xs font-medium bg-indigo-500/10 text-indigo-400">
-                {market.category}
-              </span>
-              <span className={cn(
-                'px-2.5 py-1 rounded-lg text-xs font-medium capitalize',
-                market.status === 'active'   ? 'bg-emerald-500/10 text-emerald-400' :
-                market.status === 'resolved' ? 'bg-slate-700 text-slate-300' :
-                market.status === 'disputed' ? 'bg-amber-500/10 text-amber-400' :
-                'bg-white/5 text-slate-400'
-              )}>
-                {statusMap[market.status] ?? market.status}
-              </span>
-              {rawMarket && (
-                <span className="px-2.5 py-1 rounded-lg text-xs font-medium bg-white/5 text-slate-400">
-                  Market #{rawMarket.id}
-                </span>
-              )}
-              {market.trending && (
-                <span className="px-2.5 py-1 rounded-lg text-xs font-medium bg-orange-500/10 text-orange-400">
-                  <Flame className="inline mr-1 h-3 w-3" />
-                  Trending
-                </span>
-              )}
-              {market.change24h !== 0 && (
-                <div className={cn(
-                  'flex items-center gap-1 text-xs font-medium',
-                  isPositiveChange ? 'text-yes' : 'text-no'
-                )}>
-                  {isPositiveChange
-                    ? <TrendingUp className="h-3 w-3" />
-                    : <TrendingDown className="h-3 w-3" />}
-                  {formatPercent(market.change24h)} 24h
-                </div>
-              )}
-            </div>
-
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white mb-3 max-w-3xl">
-              {market.title}
-            </h1>
-            <p className="text-slate-400 leading-relaxed max-w-2xl mb-8">
-              {market.description}
-            </p>
-          </div>
-        </div>
-
         <div className="grid gap-6 lg:grid-cols-3">
-          {/* Left column */}
-          <div className="lg:col-span-2 space-y-6">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {rawMarket ? (
-                <>
-                  <StatPill label="Volume"    value="Encrypted" />
-                  <StatPill label="Liquidity" value="Encrypted" />
-                  <StatPill label="Traders"   value="—" />
-                  <StatPill label="Time Left" value={formatTimeRemaining(market.expiryAt)} />
-                </>
-              ) : (
-                <>
-                  <StatPill label="Volume"    value={formatVolume(market.volume)} />
-                  <StatPill label="Liquidity" value={formatVolume(market.liquidity)} />
-                  <StatPill label="Traders"   value={formatTraders(market.tradersCount)} />
-                  <StatPill label="Time Left" value={formatTimeRemaining(market.expiryAt)} />
-                </>
-              )}
-            </div>
-
-            {(market.priceHistory?.length ?? 0) >= 2 && (
-            <div className="rounded-2xl border border-white/5 bg-slate-900 p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-semibold text-white">Price History</h3>
-                <div className="flex items-center gap-4 text-xs text-slate-500">
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-2 w-2 rounded-full bg-yes" />
-                    YES
-                  </span>
-                  <span>30 day</span>
-                </div>
-              </div>
-              <AreaChart data={market.priceHistory} height={220} />
-            </div>
-            )}
-
-            <div className="rounded-2xl border border-white/8 bg-slate-950/85 p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-semibold text-white">Market Activity</h3>
-                <span className="text-[11px] text-slate-500">Recent fills</span>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2.5">
-                  {recentActivity.map((item, i) => (
-                    <div
-                      key={`${item.user}-${i}`}
-                      className="flex items-center justify-between rounded-lg border border-white/8 bg-slate-900/90 px-3 py-2.5"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 text-xs">
-                          <span className="font-mono text-slate-400">{item.user}</span>
-                          <span className={cn(
-                            'rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide',
-                            item.side === 'YES'
-                              ? 'bg-emerald-500/10 text-emerald-300'
-                              : 'bg-rose-500/10 text-rose-300'
-                          )}>
-                            {item.side}
-                          </span>
-                          <span className="text-slate-500">{item.priceCents}¢</span>
-                        </div>
-                        <div className="text-[11px] text-slate-500 mt-0.5">
-                          {item.minsAgo}m ago
-                        </div>
-                      </div>
-                      <div className="text-sm font-mono text-slate-300">{item.amount}</div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="space-y-3">
-                  <div className="rounded-lg border border-white/8 bg-slate-900/90 px-3.5 py-3">
-                    <div className="text-[11px] text-slate-500 mb-1">Buy pressure</div>
-                    <div className="text-xl font-bold text-white">{buyPressure}% YES</div>
-                    <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
-                      <div
-                        className="h-full bg-emerald-400/80"
-                        style={{ width: `${buyPressure}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg border border-white/8 bg-slate-900/90 px-3.5 py-3">
-                    <div className="text-[11px] text-slate-500 mb-1">Avg fill size</div>
-                    <div className="text-xl font-bold text-white">
-                      ${(Math.round((market.volume / Math.max(market.tradersCount, 1)) * 10) / 10).toLocaleString()}
-                    </div>
-                    <div className="text-[11px] text-slate-500 mt-1">Approximate per trader participation</div>
-                  </div>
-
-                  <div className="rounded-lg border border-white/8 bg-slate-900/90 px-3.5 py-3">
-                    <div className="text-[11px] text-slate-500 mb-1">Volatility (24h)</div>
-                    <div className={cn(
-                      'text-xl font-bold',
-                      isPositiveChange ? 'text-emerald-300' : 'text-rose-300'
-                    )}>
-                      {formatPercent(market.change24h)}
-                    </div>
-                    <div className="text-[11px] text-slate-500 mt-1">Price move vs previous 24h window</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-white/5 bg-slate-900 p-5">
-              <h3 className="text-sm font-semibold text-white mb-4">Market Details</h3>
-              <div className="space-y-3">
-                <div className="flex items-start justify-between py-2 border-b border-white/5">
-                  <span className="text-sm text-slate-500 flex items-center gap-2">
-                    <ExternalLink className="h-3.5 w-3.5" />
-                    Resolution Source
-                  </span>
-                  <span className="text-sm font-medium text-white text-right max-w-[60%]">
-                    {market.resolutionSource}
-                  </span>
-                </div>
-                <div className="flex items-start justify-between py-2 border-b border-white/5">
-                  <span className="text-sm text-slate-500 flex items-center gap-2">
-                    <Clock className="h-3.5 w-3.5" />
-                    Expiry Date
-                  </span>
-                  <span className="text-sm font-medium text-white">
-                    {formatDate(market.expiryAt)}
-                  </span>
-                </div>
-                <div className="flex items-start justify-between py-2 border-b border-white/5">
-                  <span className="text-sm text-slate-500 flex items-center gap-2">
-                    <BarChart3 className="h-3.5 w-3.5" />
-                    Total Pooled
-                  </span>
-                  <span className="text-sm font-medium text-white">
-                    {rawMarket
-                      ? `— USDC (FHE-encrypted)`
-                      : formatVolume(market.volume)
-                    }
-                  </span>
-                </div>
-                {rawMarket && (
-                  <div className="flex items-start justify-between py-2 border-b border-white/5">
-                    <span className="text-sm text-slate-500 flex items-center gap-2">
-                      <Droplets className="h-3.5 w-3.5" />
-                      Pool
-                    </span>
-                    <span className="text-sm font-medium text-white font-mono">
-                      FHE-encrypted
-                    </span>
-                  </div>
-                )}
-                {rawMarket?.creator && (
-                  <div className="flex items-start justify-between py-2">
-                    <span className="text-sm text-slate-500 flex items-center gap-2">
-                      <Users className="h-3.5 w-3.5" />
-                      Creator
-                    </span>
-                    <a
-                      href={`${ETHERSCAN}/address/${rawMarket.creator}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-sm font-medium text-indigo-400 hover:text-indigo-300 font-mono transition-colors"
-                    >
-                      {`${rawMarket.creator.slice(0, 6)}…${rawMarket.creator.slice(-4)}`}
-                    </a>
-                  </div>
-                )}
-              </div>
-            </div>
+          {/* Left column — Polymarket-style hero, chart, order book, rules */}
+          <div className="lg:col-span-2">
+            <MarketDetailLeftPanel
+              market={market}
+              rawMarket={rawMarket}
+              yesPct={yesPct}
+            />
           </div>
 
           {/* Right column */}
