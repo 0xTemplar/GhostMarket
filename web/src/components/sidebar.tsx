@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { Wallet, Star, ChevronRight, Radar } from 'lucide-react';
+import { isOracleRoomPubliclyDisabled } from '@/lib/oracle-room-access';
 
 // ─── Platform stats ────────────────────────────────────────────────────────────
 
@@ -57,6 +58,8 @@ const recentActivity = [
 // ─── Component ─────────────────────────────────────────────────────────────────
 
 export function Sidebar() {
+  const oracleRoomDisabled = isOracleRoomPubliclyDisabled();
+
   return (
     <div className="space-y-5">
 
@@ -102,26 +105,28 @@ export function Sidebar() {
       </div>
 
       {/* ── Oracle room widget ── */}
-      <div className="bg-slate-950/85 rounded-2xl p-5 border border-white/8">
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex gap-3">
-            <div className="p-2 bg-slate-900 rounded-lg text-slate-300 border border-white/8">
-              <Radar className="w-5 h-5" strokeWidth={1.5} />
-            </div>
-            <div>
-              <h3 className="font-medium text-white text-sm">Oracle Room</h3>
-              <p className="text-xs text-slate-500 mt-0.5">Live swarm + quorum + proof links</p>
+      {!oracleRoomDisabled && (
+        <div className="bg-slate-950/85 rounded-2xl p-5 border border-white/8">
+          <div className="flex items-start justify-between mb-4">
+            <div className="flex gap-3">
+              <div className="p-2 bg-slate-900 rounded-lg text-slate-300 border border-white/8">
+                <Radar className="w-5 h-5" strokeWidth={1.5} />
+              </div>
+              <div>
+                <h3 className="font-medium text-white text-sm">Oracle Room</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Live swarm + quorum + proof links</p>
+              </div>
             </div>
           </div>
+          <Link
+            href="/oracle"
+            className="w-full bg-slate-900 hover:bg-slate-800 text-white py-2.5 rounded-xl text-sm font-medium transition-colors border border-white/8 hover:border-white/14 flex items-center justify-between px-4 group"
+          >
+            <span>Open Oracle Room</span>
+            <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white transition-colors" strokeWidth={1.5} />
+          </Link>
         </div>
-        <Link
-          href="/oracle"
-          className="w-full bg-slate-900 hover:bg-slate-800 text-white py-2.5 rounded-xl text-sm font-medium transition-colors border border-white/8 hover:border-white/14 flex items-center justify-between px-4 group"
-        >
-          <span>Open Oracle Room</span>
-          <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white transition-colors" strokeWidth={1.5} />
-        </Link>
-      </div>
+      )}
 
       {/* ── Watchlist widget ── */}
       <div className="bg-slate-950/85 rounded-2xl p-5 border border-white/8">

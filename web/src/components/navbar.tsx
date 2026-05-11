@@ -16,13 +16,14 @@ import {
 import { cn } from '@/lib/utils';
 import { AuthButton } from '@/components/auth-button';
 import { useFlowAuth } from '@/lib/flow/provider';
+import { isOracleRoomPubliclyDisabled } from '@/lib/oracle-room-access';
 
-const mainLinks = [
+const mainLinksBase = [
   { href: '/', label: 'Markets', icon: LayoutGrid },
   { href: '/portfolio', label: 'Portfolio', icon: Briefcase },
   { href: '/vault', label: 'Vault', icon: Wallet },
   { href: '/oracle', label: 'Oracle Room', icon: Radar },
-];
+] as const;
 
 const categories = [
   'All',
@@ -43,6 +44,9 @@ export function Navbar() {
   const isAdmin =
     ADMIN_ADDRESS &&
     user.evmAddress?.toLowerCase() === ADMIN_ADDRESS;
+  const mainLinks = isOracleRoomPubliclyDisabled()
+    ? mainLinksBase.filter((l) => l.href !== '/oracle')
+    : [...mainLinksBase];
 
   return (
     <nav className="border-b border-white/5 bg-slate-950/95 backdrop-blur-md sticky top-0 z-50">

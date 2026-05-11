@@ -1,12 +1,14 @@
+import { notFound } from 'next/navigation';
 import { OracleRoom } from '@/components/oracle-room';
-import { OracleLocked } from '@/components/oracle-locked';
 import { MotionWrapper } from '@/components/motion-wrapper';
+import { isOracleRoomPubliclyDisabled } from '@/lib/oracle-room-access';
+
+/** Env-based lock must be evaluated per request, not at build time. */
+export const dynamic = 'force-dynamic';
 
 export default function OraclePage() {
-  const isLocked = process.env.ORACLE_ROOM_LOCKED === 'true';
-
-  if (isLocked) {
-    return <OracleLocked />;
+  if (isOracleRoomPubliclyDisabled()) {
+    notFound();
   }
 
   return (

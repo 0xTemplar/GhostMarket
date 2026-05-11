@@ -209,9 +209,9 @@ const AGENT_STATUS_CFG: Record<string, { color: string }> = {
 // Fallback source labels for the 4 active agents.
 // Agent cards prefer agent.source from the WS payload when present.
 const AGENT_SOURCE_FALLBACK: Record<string, string> = {
-  Cipher:  'Binance',
+  Cipher: 'Binance',
   Specter: 'CoinGecko',
-  Wraith:  'Chainlink',
+  Wraith: 'Chainlink',
   Phantom: 'Coinbase',
 };
 
@@ -500,7 +500,9 @@ export function OracleRoom() {
   const [marketTitles, setMarketTitles] = useState<Record<string, string>>({});
   const [session, setSession] = useState<OracleSession | null>(null);
   const [lastSettlement, setLastSettlement] = useState<{
-    payout: string; isWinner: boolean; txHash: string | null;
+    payout: string;
+    isWinner: boolean;
+    txHash: string | null;
   } | null>(null);
   const [loadingSession, setLoadingSession] = useState(false);
   const [resolving, setResolving] = useState(false);
@@ -600,7 +602,9 @@ export function OracleRoom() {
               };
             }
             case 'finalized': {
-              const finalPayload = msg.payload as unknown as { outcome?: boolean };
+              const finalPayload = msg.payload as unknown as {
+                outcome?: boolean;
+              };
               return {
                 ...prev,
                 phase: 'finalized',
@@ -617,9 +621,9 @@ export function OracleRoom() {
               };
               if (settlementPayload.payout !== undefined) {
                 setLastSettlement({
-                  payout:   settlementPayload.payout ?? '0',
+                  payout: settlementPayload.payout ?? '0',
                   isWinner: false,
-                  txHash:   settlementPayload.txHash ?? null,
+                  txHash: settlementPayload.txHash ?? null,
                 });
               }
               return prev;
@@ -734,9 +738,7 @@ export function OracleRoom() {
 
   const phase = session?.phase ?? 'idle';
   const isFinalized = phase === 'finalized';
-  const isLive =
-    phase === 'collecting' ||
-    phase === 'quorum_reached';
+  const isLive = phase === 'collecting' || phase === 'quorum_reached';
   const sepoliaSync = session?.sepoliaResolutionSync ?? {
     status: 'idle' as const,
     txHash: null,
@@ -1204,39 +1206,8 @@ export function OracleRoom() {
           <div className="rounded-2xl border border-white/8 bg-slate-950/85 p-5">
             <div className="mb-4 flex items-center gap-2">
               <Activity className="h-4 w-4 text-cyan-400" />
-              <h2 className="text-sm font-semibold text-white">
-                Cross-chain Sync
-              </h2>
             </div>
-            <div className="space-y-2 font-mono text-[11px]">
-              <div className="flex items-center justify-between rounded-lg border border-white/8 bg-slate-950/90 px-3 py-2">
-                <span className="text-slate-500">Sepolia (canonical)</span>
-                <span
-                  className={cn(
-                    sepoliaSync.status === 'synced' && 'text-emerald-300',
-                    sepoliaSync.status === 'pending' && 'text-amber-300',
-                    sepoliaSync.status === 'failed' && 'text-rose-300',
-                    sepoliaSync.status === 'skipped' && 'text-slate-400',
-                    sepoliaSync.status === 'idle' && 'text-slate-500',
-                  )}
-                >
-                  {sepoliaSync.status}
-                </span>
-              </div>
-            </div>
-            {sepoliaSync.txHash && (
-              <div className="mt-3 space-y-2">
-                <HashRow
-                  label="Sepolia resolve TX"
-                  icon={Activity}
-                  value={sepoliaSync.txHash}
-                  href={`${SEPOLIA_TX_BASE}${sepoliaSync.txHash}`}
-                  copyKey="sepoliaResolveTx"
-                  copied={copied}
-                  onCopy={copy}
-                />
-              </div>
-            )}
+            <div className="space-y-2 font-mono text-[11px]"></div>
           </div>
 
           {/* ── Session Metadata ─────────────────────────────────────────────── */}
