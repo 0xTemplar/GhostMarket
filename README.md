@@ -8,7 +8,7 @@
 [![Zama fhevm](https://img.shields.io/badge/Zama-fhevm_coprocessor-412891?style=flat-square)](https://docs.zama.ai/fhevm)
 [![License](https://img.shields.io/badge/License-MIT-gray?style=flat-square)](LICENSE)
 
-![Ghost-market-header](https://github.com/user-attachments/assets/60eec664-d53f-4ff1-8589-a7803037e691)
+<img width="1920" height="1080" alt="417f7baa-c99c-494f-a97a-be66169737e3" src="https://github.com/user-attachments/assets/4c3e3305-9ec8-4e7d-9d2e-beccaa48b92c" />
 
 *Your position size is invisible to the market. The chain. The oracle. The block explorer. Front-runners.*
 
