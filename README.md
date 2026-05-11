@@ -13,7 +13,8 @@
 <h1 align="center">GhostMarket</h1>
 
 <p align="center">
-  <strong>Every deposit, every bet, every payout — a ciphertext from browser to blockchain.</strong><br/>
+  <strong>Confidential Dark Pool Prediction Market</strong><br/>
+  Every deposit, every bet, every payout — a ciphertext from browser to blockchain.<br/>
   <em>The chain knows you bet. It does not know on what, in what size, or for how much.</em>
 </p>
 
