@@ -12,10 +12,10 @@
  */
 
 import { ethers } from 'ethers';
+import { getSepoliaOraclePrivateKey } from './sepolia-keys';
 
 // ── Environment ───────────────────────────────────────────────────────────────
 
-const ORACLE_PRIVATE_KEY  = process.env.ORACLE_PRIVATE_KEY ?? '';
 const SEPOLIA_RPC_URL     = process.env.SEPOLIA_RPC_URL ?? 'https://rpc.sepolia.org';
 const GHOST_VAULT_ADDRESS = process.env.GHOST_VAULT_ADDRESS ?? '';
 
@@ -40,12 +40,15 @@ const CLAIM_TYPE = {
 let _wallet: ethers.Wallet | null = null;
 
 function getOracleWallet(): ethers.Wallet {
-  if (!ORACLE_PRIVATE_KEY) {
-    throw new Error('ORACLE_PRIVATE_KEY not set — cannot sign settlement messages');
+  const key = getSepoliaOraclePrivateKey();
+  if (!key) {
+    throw new Error(
+      'No Sepolia oracle key (ORACLE_PRIVATE_KEY, SEPOLIA_PRIVATE_KEY, or SETTLEMENT_SIGNER_PRIVATE_KEY) — cannot sign settlement messages',
+    );
   }
   if (!_wallet) {
     const provider = new ethers.JsonRpcProvider(SEPOLIA_RPC_URL);
-    _wallet = new ethers.Wallet(ORACLE_PRIVATE_KEY, provider);
+    _wallet = new ethers.Wallet(key, provider);
   }
   return _wallet;
 }

@@ -13,10 +13,10 @@
  *   npx hardhat run scripts/demo-sealed-window.ts --network sepolia
  *
  * Required env (contracts/.env):
- *   DEPLOYER_PRIVATE_KEY
+ *   DEPLOYER_PRIVATE_KEY   — must be GhostMarket owner (opens sealed window via GhostMarket)
  *   SEPOLIA_RPC_URL
  *   GHOST_MARKET_ADDRESS
- *   GHOST_EAMM_ADDRESS
+ *   GHOST_EAMM_ADDRESS     — must equal GhostMarket.eamm() on-chain (run full deploy or redeploy-eamm)
  *
  * Optional env:
  *   DEMO_WINDOW_SECS  — window duration in seconds (default: 30, minimum: 30)
@@ -25,8 +25,18 @@
 
 import { ethers } from 'hardhat';
 
+/**
+ * Explicit gas limits avoid eth_estimateGas when using Hardhat + @fhevm/hardhat-plugin
+ * against real Sepolia — the FHE-wrapped provider can make estimation revert even though
+ * eth_call / sends with a fixed limit succeed (plain `ethers` + the same RPC works).
+ */
+const GAS_CREATE_MARKET = 1_200_000n;
+const GAS_OPEN_WINDOW = 800_000n;
+
 const GHOST_MARKET_ABI = [
-  'function createMarket(string calldata title, string calldata description, string calldata category, string calldata resolutionSource, uint256 expiryAt) external returns (uint256 marketId)',
+  'function eamm() external view returns (address)',
+  'function createMarket(string title, string description, string category, string resolutionSource, uint64 expiryAt) external returns (uint256 marketId)',
+  'function openSealedWindow(uint256 marketId, uint64 durationSecs) external',
   'function getMarket(uint256 id) external view returns (tuple(uint256 id, address creator, string title, string description, string category, string resolutionSource, uint256 expiryAt, uint8 status, bool outcome))',
 ];
 
@@ -40,16 +50,37 @@ async function main() {
   const [deployer] = await ethers.getSigners();
 
   const ghostMarketAddress = process.env.GHOST_MARKET_ADDRESS ?? '';
-  const ghostEammAddress   = process.env.GHOST_EAMM_ADDRESS   ?? '';
-  const windowSecs         = BigInt(process.env.DEMO_WINDOW_SECS ?? '30');
-  const existingMarketId   = process.env.DEMO_MARKET_ID ? BigInt(process.env.DEMO_MARKET_ID) : null;
+  const ghostEammAddress = process.env.GHOST_EAMM_ADDRESS ?? '';
+  const windowSecs = BigInt(process.env.DEMO_WINDOW_SECS ?? '30');
+  const existingMarketId = process.env.DEMO_MARKET_ID
+    ? BigInt(process.env.DEMO_MARKET_ID)
+    : null;
 
-  if (!ghostMarketAddress) throw new Error('GHOST_MARKET_ADDRESS not set in contracts/.env');
-  if (!ghostEammAddress)   throw new Error('GHOST_EAMM_ADDRESS not set in contracts/.env');
-  if (windowSecs < 30n)    throw new Error('DEMO_WINDOW_SECS must be ≥ 30');
+  if (!ghostMarketAddress)
+    throw new Error('GHOST_MARKET_ADDRESS not set in contracts/.env');
+  if (!ghostEammAddress)
+    throw new Error('GHOST_EAMM_ADDRESS not set in contracts/.env');
+  if (windowSecs < 30n) throw new Error('DEMO_WINDOW_SECS must be ≥ 30');
 
-  const ghostMarket = new ethers.Contract(ghostMarketAddress, GHOST_MARKET_ABI, deployer);
-  const ghostEamm   = new ethers.Contract(ghostEammAddress,   GHOST_EAMM_ABI,   deployer);
+  const ghostMarket = new ethers.Contract(
+    ghostMarketAddress,
+    GHOST_MARKET_ABI,
+    deployer,
+  );
+  const ghostEamm = new ethers.Contract(
+    ghostEammAddress,
+    GHOST_EAMM_ABI,
+    deployer,
+  );
+
+  const linkedEamm = (await ghostMarket.eamm()) as string;
+  if (linkedEamm.toLowerCase() !== ghostEammAddress.toLowerCase()) {
+    throw new Error(
+      `GhostMarket.eamm() is ${linkedEamm} but GHOST_EAMM_ADDRESS is ${ghostEammAddress}. ` +
+        'Run `npx hardhat run scripts/deploy-sepolia.ts --network sepolia` (full redeploy) or ' +
+        '`scripts/redeploy-eamm.ts`, then paste matching addresses into contracts/.env.',
+    );
+  }
 
   let marketId: bigint;
 
@@ -59,9 +90,11 @@ async function main() {
   } else {
     // ── Step 1: create a showcase market ──────────────────────────────────────
 
-    const expiryAt = BigInt(Math.floor(Date.now() / 1000) + 7 * 24 * 3600); // 7 days
+    const expiryAt = Math.floor(Date.now() / 1000) + 7 * 24 * 3600; // uint64-safe
 
-    console.log(`\n─── Creating showcase market (deployer: ${deployer.address}) ───`);
+    console.log(
+      `\n─── Creating showcase market (deployer: ${deployer.address}) ───`,
+    );
 
     const tx = await ghostMarket.createMarket(
       'Will BTC trade above $120,000 before Jan 2027?',
@@ -70,35 +103,61 @@ async function main() {
       'Crypto',
       'CoinGecko BTC/USD spot price at market expiry',
       expiryAt,
+      { gasLimit: GAS_CREATE_MARKET },
     );
     const receipt = await tx.wait();
     console.log(`createMarket TX: https://sepolia.etherscan.io/tx/${tx.hash}`);
 
-    // Parse the MarketCreated event to get the ID.
+    // Parse the MarketCreated event (must match GhostMarket.sol).
     const ghostMarketInterface = new ethers.Interface([
-      'event MarketCreated(uint256 indexed id, address indexed creator, string title)',
+      'event MarketCreated(uint256 indexed marketId, string title, string category, uint64 expiryAt)',
     ]);
     const log = receipt.logs
       .map((l: { topics: string[]; data: string }) => {
-        try { return ghostMarketInterface.parseLog(l); } catch { return null; }
+        try {
+          return ghostMarketInterface.parseLog(l);
+        } catch {
+          return null;
+        }
       })
-      .find((l: ReturnType<typeof ghostMarketInterface.parseLog> | null) => l?.name === 'MarketCreated');
+      .find(
+        (l: ReturnType<typeof ghostMarketInterface.parseLog> | null) =>
+          l?.name === 'MarketCreated',
+      );
 
     if (!log) throw new Error('Could not parse MarketCreated event');
-    marketId = BigInt(log.args.id);
+    marketId = BigInt(log.args.marketId);
     console.log(`Market created — ID: ${marketId}`);
   }
 
   // ── Step 2: open a sealed window ──────────────────────────────────────────
 
-  console.log(`\n─── Opening ${windowSecs}s sealed-bid window on market ${marketId} ───`);
+  console.log(
+    `\n─── Opening ${windowSecs}s sealed-bid window on market ${marketId} ───`,
+  );
 
-  const windowTx = await ghostEamm.openSealedWindow(marketId, windowSecs);
+  let windowTx;
+  try {
+    windowTx = await ghostMarket.openSealedWindow(marketId, windowSecs, {
+      gasLimit: GAS_OPEN_WINDOW,
+    });
+  } catch (firstErr) {
+    console.warn(
+      'GhostMarket.openSealedWindow failed (older GhostMarket bytecode?). ' +
+        'Falling back to GhostEAMM — requires deployer to be EAMM owner.\n',
+      (firstErr as Error).message,
+    );
+    windowTx = await ghostEamm.openSealedWindow(marketId, windowSecs, {
+      gasLimit: GAS_OPEN_WINDOW,
+    });
+  }
   await windowTx.wait();
-  console.log(`openSealedWindow TX: https://sepolia.etherscan.io/tx/${windowTx.hash}`);
+  console.log(
+    `openSealedWindow TX: https://sepolia.etherscan.io/tx/${windowTx.hash}`,
+  );
 
   const windowCount = await ghostEamm.getSealedWindowCount(marketId);
-  const activeIdx   = await ghostEamm.getActiveWindowIdx(marketId);
+  const activeIdx = await ghostEamm.getActiveWindowIdx(marketId);
 
   console.log(`\n╔═══════════════════════════════════════╗`);
   console.log(`║        DEMO SEALED WINDOW OPEN        ║`);

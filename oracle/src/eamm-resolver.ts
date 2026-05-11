@@ -11,11 +11,11 @@
  */
 
 import { ethers } from 'ethers';
+import { getSepoliaOraclePrivateKey } from './sepolia-keys';
 
 // ── Environment ───────────────────────────────────────────────────────────────
 
 const SEPOLIA_RPC_URL    = process.env.SEPOLIA_RPC_URL ?? 'https://rpc.sepolia.org';
-const ORACLE_PRIVATE_KEY = process.env.ORACLE_PRIVATE_KEY ?? '';
 const GHOST_EAMM_ADDRESS = process.env.GHOST_EAMM_ADDRESS ?? '';
 
 // ── ABIs (minimal) ────────────────────────────────────────────────────────────
@@ -35,11 +35,12 @@ let _wallet: ethers.Wallet | null = null;
 let _eamm: ethers.Contract | null = null;
 
 function getEamm(): ethers.Contract {
-  if (!ORACLE_PRIVATE_KEY) throw new Error('ORACLE_PRIVATE_KEY not set');
+  const key = getSepoliaOraclePrivateKey();
+  if (!key) throw new Error('Sepolia oracle key not set (ORACLE_PRIVATE_KEY, SEPOLIA_PRIVATE_KEY, or SETTLEMENT_SIGNER_PRIVATE_KEY)');
   if (!GHOST_EAMM_ADDRESS) throw new Error('GHOST_EAMM_ADDRESS not set');
   if (!_eamm) {
     _provider = new ethers.JsonRpcProvider(SEPOLIA_RPC_URL);
-    _wallet   = new ethers.Wallet(ORACLE_PRIVATE_KEY, _provider);
+    _wallet   = new ethers.Wallet(key, _provider);
     _eamm     = new ethers.Contract(GHOST_EAMM_ADDRESS, EAMM_ABI, _wallet);
   }
   return _eamm;
@@ -63,8 +64,8 @@ export async function resolveEammMarket(
   marketId: string,
   outcome:  boolean,
 ): Promise<SyncResult> {
-  if (!ORACLE_PRIVATE_KEY || !GHOST_EAMM_ADDRESS) {
-    console.warn('[EAMM] Skipping resolveMarket — ORACLE_PRIVATE_KEY or GHOST_EAMM_ADDRESS not set');
+  if (!getSepoliaOraclePrivateKey() || !GHOST_EAMM_ADDRESS) {
+    console.warn('[EAMM] Skipping resolveMarket — Sepolia oracle key or GHOST_EAMM_ADDRESS not set');
     return { status: 'skipped', txHash: null };
   }
 
@@ -105,7 +106,7 @@ export async function grantPositionAccess(
   marketId: string,
   userAddress: string,
 ): Promise<{ txHash: string | null }> {
-  if (!ORACLE_PRIVATE_KEY || !GHOST_EAMM_ADDRESS) {
+  if (!getSepoliaOraclePrivateKey() || !GHOST_EAMM_ADDRESS) {
     return { txHash: null };
   }
 

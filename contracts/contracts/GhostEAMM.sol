@@ -571,12 +571,22 @@ contract GhostEAMM is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard, Pausabl
         w.settled = true;
 
         // Grant the resolver ACL on the current (post-window) pool totals.
+        // Also grant msg.sender so an oracle EOA calling directly (owner role)
+        // can gateway-decrypt without needing to be the on-chain resolver address.
         FHE.allow(m.yesPool, resolver);
         FHE.allow(m.noPool,  resolver);
+        if (msg.sender != resolver) {
+            FHE.allow(m.yesPool, msg.sender);
+            FHE.allow(m.noPool,  msg.sender);
+        }
 
         // Grant access to the pre-window snapshots for delta computation.
         FHE.allow(w.yesPoolSnapshot, resolver);
         FHE.allow(w.noPoolSnapshot,  resolver);
+        if (msg.sender != resolver) {
+            FHE.allow(w.yesPoolSnapshot, msg.sender);
+            FHE.allow(w.noPoolSnapshot,  msg.sender);
+        }
 
         emit SealedWindowSettled(marketId, windowIdx);
     }

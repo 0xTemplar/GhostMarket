@@ -1,3 +1,5 @@
+import 'dotenv/config';
+
 /**
  * GhostMarket Oracle Service — index.ts
  *
@@ -31,8 +33,7 @@ import express    from 'express';
 import cors       from 'cors';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer }               from 'http';
-import dotenv     from 'dotenv';
-
+import { getSepoliaOraclePrivateKey } from './sepolia-keys';
 import { buildAgents, agentDelay, AGENT_DEFINITIONS } from './agents';
 import { startSealedWindowWatcher } from './sealed-window-watcher';
 import { fetchSourceData, extractAsset, extractThreshold, type FetchedData } from './fetcher';
@@ -54,9 +55,6 @@ import type {
   SettlementClaimResponse,
 } from './types';
 
-dotenv.config();
-
-// ── App setup ──────────────────────────────────────────────────────────────────
 
 const app    = express();
 const server = createServer(app);
@@ -352,7 +350,7 @@ async function finalizeResolution(session: ResolutionSession) {
     if (sync.status === 'synced') {
       addLog(session, 'GhostEAMM market resolved on Sepolia', { txHash: sync.txHash ?? null });
     } else if (sync.status === 'skipped') {
-      addLog(session, 'Sepolia EAMM sync skipped (ORACLE_PRIVATE_KEY or GHOST_EAMM_ADDRESS not set)');
+      addLog(session, 'Sepolia EAMM sync skipped (no Sepolia oracle key or GHOST_EAMM_ADDRESS)');
     } else {
       addLog(session, `Sepolia EAMM sync failed: ${sync.message ?? 'unknown error'}`);
     }
@@ -539,7 +537,7 @@ app.post('/oracle/resolve/:marketId', async (req, res) => {
     MARKET_TITLES[String(marketId)] ??
     `Market #${marketId} — resolution in progress`;
 
-  const baseKey = process.env.ORACLE_PRIVATE_KEY ?? '';
+  const baseKey = getSepoliaOraclePrivateKey();
   const { ethers } = await import('ethers');
   const addresses = Array.from({ length: ACTIVE_AGENT_COUNT }, (_, i) => {
     try {

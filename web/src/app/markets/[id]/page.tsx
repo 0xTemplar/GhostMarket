@@ -6,7 +6,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
   ArrowLeft, Clock, Users, BarChart3, Droplets, Shield, ExternalLink,
-  Flame, TrendingUp, TrendingDown, Loader2, AlertCircle, RefreshCw, Lock,
+  Flame, TrendingUp, TrendingDown, Loader2, AlertCircle, RefreshCw, Lock, Unlock,
 } from 'lucide-react';
 import { mockMarkets } from '@/data/markets';
 import type { Market } from '@/types/market';
@@ -28,7 +28,7 @@ import {
 import { SealedCountdown } from '@/components/sealed-countdown';
 import {
   readLockedAmountHandle, readIsMarketResolved,
-  GHOST_VAULT_ADDRESS, publicClient,
+  GHOST_VAULT_ADDRESS, publicClient, formatUsdc,
 } from '@/lib/vault';
 import { useFlowAuth, useFlowWalletClient } from '@/lib/flow/provider';
 
@@ -78,6 +78,31 @@ function fmtUsdc(baseUnits: string): string {
   return (parseFloat(baseUnits) / 1e6).toFixed(2);
 }
 
+/** Plaintext USDC base-units string, or this when the vault value is not decrypted client-side. */
+const ENCRYPTED_USDC_FIELD = 'Encrypted';
+
+function parseUsdcBaseUnits(s: string): bigint | null {
+  if (s === ENCRYPTED_USDC_FIELD) return null;
+  try {
+    return BigInt(s);
+  } catch {
+    return null;
+  }
+}
+
+function fmtUsdcMaybe(s: string): string {
+  if (s === ENCRYPTED_USDC_FIELD) return '—';
+  return fmtUsdc(s);
+}
+
+function formatLockedCollateral(
+  decrypted: bigint | null,
+  encryptedField: string,
+): string {
+  if (decrypted !== null) return formatUsdc(decrypted);
+  return fmtUsdcMaybe(encryptedField);
+}
+
 function OnChainActions({
   raw,
 }: {
@@ -89,11 +114,16 @@ function OnChainActions({
   const [posLoading, setPosLoading] = useState(false);
   const [shieldedPos, setShieldedPos] = useState<{
     hasYes: boolean; hasNo: boolean;
-    locked: string;       // USDC base units as string
+    locked: string;       // USDC base units as string, or ENCRYPTED_USDC_FIELD
+    lockedHandle: `0x${string}` | null;
     side: string;
     computedPayout: string; // USDC base units as string
     vaultResolved: boolean;
   } | null>(null);
+  const [decryptedLockedUsdc, setDecryptedLockedUsdc] = useState<bigint | null>(null);
+  const [decryptCollateralLoading, setDecryptCollateralLoading] = useState(false);
+  const [decryptCollateralError, setDecryptCollateralError] = useState(false);
+  const prevLockedHandleRef = useRef<`0x${string}` | null>(null);
   const [actionState, setActionState] = useState<
     | { phase: 'idle' }
     | { phase: 'loading' }
@@ -102,6 +132,13 @@ function OnChainActions({
   >({ phase: 'idle' });
 
   const marketIdBytes32 = ('0x' + BigInt(raw.id).toString(16).padStart(64, '0')) as `0x${string}`;
+
+  useEffect(() => {
+    setShieldedPos(null);
+    prevLockedHandleRef.current = null;
+    setDecryptedLockedUsdc(null);
+    setDecryptCollateralError(false);
+  }, [raw.id]);
 
   const loadPosition = useCallback(async () => {
     if (!user.evmAddress) return;
@@ -121,16 +158,31 @@ function OnChainActions({
       if (handles) {
         const hasYes = handles.yesHandle !== zero;
         const hasNo  = handles.noHandle  !== zero;
-        if (hasYes || hasNo || (lockedHandle !== '0x0000000000000000000000000000000000000000000000000000000000000000' && lockedHandle !== '0x')) {
+        const lockActive =
+          lockedHandle !== '0x0000000000000000000000000000000000000000000000000000000000000000' &&
+          lockedHandle !== '0x';
+        const lh: `0x${string}` | null = lockActive ? lockedHandle : null;
+
+        if (hasYes || hasNo || lockActive) {
+          if (lh !== prevLockedHandleRef.current) {
+            prevLockedHandleRef.current = lh;
+            setDecryptedLockedUsdc(null);
+            setDecryptCollateralError(false);
+          }
           const side = hasYes && hasNo ? 'YES + NO' : hasYes ? 'YES' : hasNo ? 'NO' : '?';
           setShieldedPos({
             hasYes, hasNo,
-            locked:         "Encrypted",
+            locked:         ENCRYPTED_USDC_FIELD,
+            lockedHandle:   lh,
             side,
-            computedPayout: "Encrypted",
+            computedPayout: ENCRYPTED_USDC_FIELD,
             vaultResolved,
           });
+        } else {
+          setShieldedPos(null);
         }
+      } else {
+        setShieldedPos(null);
       }
     } finally {
       setPosLoading(false);
@@ -142,6 +194,26 @@ function OnChainActions({
     const interval = setInterval(loadPosition, 15_000);
     return () => clearInterval(interval);
   }, [loadPosition]);
+
+  const handleDecryptCollateral = async () => {
+    if (!walletClient || !user.evmAddress || !shieldedPos?.lockedHandle) return;
+    setDecryptCollateralLoading(true);
+    setDecryptCollateralError(false);
+    try {
+      const { userDecryptHandles } = await import('@/lib/eamm');
+      const h = shieldedPos.lockedHandle;
+      const results = await userDecryptHandles(
+        walletClient,
+        [{ handle: h, contractAddress: GHOST_VAULT_ADDRESS }],
+        user.evmAddress as `0x${string}`,
+      );
+      setDecryptedLockedUsdc((results[h] ?? 0n) as bigint);
+    } catch {
+      setDecryptCollateralError(true);
+    } finally {
+      setDecryptCollateralLoading(false);
+    }
+  };
 
   const handleWithdraw = async (usdcBaseUnits: string) => {
     if (!walletClient || !user.evmAddress) return;
@@ -168,21 +240,34 @@ function OnChainActions({
 
   if (!user.loggedIn) return null;
 
-  // Shielded position settled: payout credited, lock fully released
+  const lockedBn =
+    shieldedPos == null
+      ? null
+      : decryptedLockedUsdc !== null
+        ? decryptedLockedUsdc
+        : parseUsdcBaseUnits(shieldedPos.locked);
+  const payoutBn   = shieldedPos ? parseUsdcBaseUnits(shieldedPos.computedPayout) : null;
+
+  // Shielded position settled: payout credited, lock fully released (needs decrypted lock; otherwise unknown)
   const shieldedSettled =
     shieldedPos !== null &&
     shieldedPos.vaultResolved &&
-    BigInt(shieldedPos.locked) === 0n;
+    lockedBn !== null &&
+    lockedBn === 0n;
 
-  // Shielded position awaiting settlement: market resolved but lock still held
+  // Market resolved but lock still held — treat unknown encrypted lock as still held
   const shieldedPendingSettlement =
     shieldedPos !== null &&
     shieldedPos.vaultResolved &&
-    BigInt(shieldedPos.locked) > 0n;
+    (lockedBn ?? 1n) > 0n;
 
   const shieldedWon =
     shieldedPendingSettlement &&
-    BigInt(shieldedPos!.computedPayout) > 0n;
+    payoutBn !== null &&
+    payoutBn > 0n;
+
+  const showEncryptedCollateralRow =
+    lockedBn === null || lockedBn > 0n;
 
   return (
     <div className="rounded-2xl border border-white/5 bg-slate-900 p-5 space-y-4">
@@ -227,20 +312,43 @@ function OnChainActions({
                     <p className="text-xs text-emerald-300 font-medium">
                       You won! Oracle settling — payout{' '}
                       <span className="font-mono font-bold">
-                        {fmtUsdc(shieldedPos.computedPayout)} USDC
+                        {fmtUsdcMaybe(shieldedPos.computedPayout)} cUSDC
                       </span>{' '}
                       will be credited to your vault.
+                    </p>
+                  ) : payoutBn === null && shieldedPendingSettlement ? (
+                    <p className="text-xs text-slate-300">
+                      Position resolved — settlement in progress (amounts stay private until decrypted).
                     </p>
                   ) : (
                     <p className="text-xs text-rose-300">
                       Position resolved — oracle releasing your lock.
                     </p>
                   )}
-                  <div className="flex items-center gap-1.5 text-xs">
+                  <div className="flex items-center gap-1.5 text-xs flex-wrap">
                     <span className="text-slate-500">Collateral locked:</span>
                     <span className="font-mono text-amber-400">
-                      {fmtUsdc(shieldedPos.locked)} USDC
+                      {formatLockedCollateral(decryptedLockedUsdc, shieldedPos.locked)} USDC
                     </span>
+                    {shieldedPos.lockedHandle && decryptedLockedUsdc === null && walletClient && (
+                      <button
+                        type="button"
+                        onClick={handleDecryptCollateral}
+                        disabled={decryptCollateralLoading}
+                        title="Sign an EIP-712 message — only you can see this amount."
+                        className="inline-flex items-center gap-1 rounded-md border border-white/10 px-2 py-0.5 text-[10px] font-medium text-indigo-200 hover:bg-white/5 disabled:opacity-50"
+                      >
+                        {decryptCollateralLoading ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Unlock className="h-3 w-3" />
+                        )}
+                        Reveal
+                      </button>
+                    )}
+                    {decryptCollateralError && (
+                      <span className="text-rose-400 text-[10px]">Decrypt failed · try again</span>
+                    )}
                   </div>
                 </>
               ) : (
@@ -248,12 +356,31 @@ function OnChainActions({
                   <p className="text-xs text-slate-400 leading-relaxed">
                     Bet amount is FHE-encrypted on the eAMM — exact size is private.
                   </p>
-                  {BigInt(shieldedPos.locked) > 0n && (
-                    <div className="flex items-center gap-1.5 text-xs">
+                  {showEncryptedCollateralRow && (
+                    <div className="flex items-center gap-1.5 text-xs flex-wrap">
                       <span className="text-slate-500">Collateral locked:</span>
                       <span className="font-mono text-amber-400">
-                        {fmtUsdc(shieldedPos.locked)} USDC
+                        {formatLockedCollateral(decryptedLockedUsdc, shieldedPos.locked)} cUSDC
                       </span>
+                      {shieldedPos.lockedHandle && decryptedLockedUsdc === null && walletClient && (
+                        <button
+                          type="button"
+                          onClick={handleDecryptCollateral}
+                          disabled={decryptCollateralLoading}
+                          title="Sign an EIP-712 message — only you can see this amount."
+                          className="inline-flex items-center gap-1 rounded-md border border-white/10 px-2 py-0.5 text-[10px] font-medium text-indigo-200 hover:bg-white/5 disabled:opacity-50"
+                        >
+                          {decryptCollateralLoading ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Unlock className="h-3 w-3" />
+                          )}
+                          Reveal
+                        </button>
+                      )}
+                      {decryptCollateralError && (
+                        <span className="text-rose-400 text-[10px]">Decrypt failed · try again</span>
+                      )}
                     </div>
                   )}
                 </>

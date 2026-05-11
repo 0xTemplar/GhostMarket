@@ -6,11 +6,12 @@ import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
 
 // ─── GhostEAMM interface ──────────────────────────────────────────────────────
-// Only the three lifecycle functions GhostMarket needs to forward.
+// Lifecycle + sealed-window entry points GhostMarket forwards to GhostEAMM.
 interface IGhostEAMM {
     function createMarket(uint256 marketId, uint64 expiryAt) external;
     function resolveMarket(uint256 marketId, bool outcome) external;
     function cancelMarket(uint256 marketId) external;
+    function openSealedWindow(uint256 marketId, uint64 durationSecs) external;
 }
 
 /**
@@ -20,8 +21,8 @@ interface IGhostEAMM {
  * Responsibilities:
  *  1. Stores human-readable market metadata (title, description, category,
  *     resolution source, expiry).
- *  2. Forwards every lifecycle call (create / resolve / cancel) to GhostEAMM
- *     so the encrypted AMM stays in sync automatically.
+ *  2. Forwards every lifecycle call (create / resolve / cancel / openSealedWindow)
+ *     to GhostEAMM so the encrypted AMM stays in sync automatically.
  *
  * There is no manual "sync" or "mirror" step — one admin call here propagates
  * to both contracts atomically in the same transaction.
@@ -171,6 +172,16 @@ contract GhostMarket is ReentrancyGuard, Pausable, Ownable2Step {
         eamm.cancelMarket(marketId);
 
         emit MarketCancelled(marketId);
+    }
+
+    /**
+     * @notice Open a sealed-bid window on the linked GhostEAMM for a market.
+     *
+     * Forwards as `marketManager` so this works even when the EAMM owner is a
+     * different key than the GhostMarket owner.
+     */
+    function openSealedWindow(uint256 marketId, uint64 durationSecs) external onlyOwner {
+        eamm.openSealedWindow(marketId, durationSecs);
     }
 
     // ─── View helpers ─────────────────────────────────────────────────────────
