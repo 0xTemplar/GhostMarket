@@ -59,7 +59,7 @@
 
 GhostMarket is a binary prediction market where **no financial value ever exists as plaintext on-chain.** Not deposits. Not pool totals. Not bet sizes. Not payouts. Every value is an `euint64` ciphertext processed by the [Zama FHEVM](https://docs.zama.ai/fhevm) coprocessor on Ethereum Sepolia.
 
-The ERC-7984 cUSDC token holding all collateral literally cannot answer the question "how much does this user own?" The oracle signs over an *encrypted handle*, not a `uint256`. Two users can place bets in the same window and neither can infer the other's size from a price delta — because the price is frozen until the window closes.
+The ERC-7984 cUSDC token holding all collateral literally cannot answer the question "how much does this user own?" The oracle signs over an *encrypted handle*, not a `uint256`. Two users can place bets in the same window and neither can infer the other's size from a price delta, because the price is frozen until the window closes.
 
 Combined with a **sealed-bid window** mechanism, a **7-agent AI oracle quorum** grounded in live exchange feeds, and **Privy walletless login**, this is what Polymarket would look like if the chain refused to publish your size.
 
